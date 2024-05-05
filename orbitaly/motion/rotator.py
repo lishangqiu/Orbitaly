@@ -65,6 +65,7 @@ class StepperRotator(Rotator):
         self._watchdog: threading.Thread | None = None
 
         backend.arm_estop(self._on_estop)
+        backend.arm_fault(self._on_backend_fault)
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -165,6 +166,10 @@ class StepperRotator(Rotator):
 
     def _on_estop(self) -> None:
         self.emergency_stop("E-stop asserted")
+
+    def _on_backend_fault(self, reason: str) -> None:
+        """The hardware link failed, rather than an operator hitting a button."""
+        self.emergency_stop(reason)
 
     # -- test seam ----------------------------------------------------------
 

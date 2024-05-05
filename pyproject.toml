@@ -10,8 +10,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-    "skyfield>=1.49",
+    "skyfield>=1.48",
     "sgp4>=2.23",
+    # Skyfield pulls numpy in anyway, but the predictor's vectorized ground
+    # tracks use it directly, so it is declared rather than assumed.
+    "numpy>=1.24",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "httpx>=0.27",
@@ -19,8 +22,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Raspberry Pi GPIO. lgpio talks to the kernel gpiochip character device, which
-# is the only supported path on a Pi 5 (RPi.GPIO and pigpio cannot work there).
+# The reference deployment: the Pi talks to an Arduino over USB, and the
+# Arduino's pins drive the step/dir inputs. See firmware/ and docs/HARDWARE.md.
+serial = ["pyserial>=3.5"]
+# Raspberry Pi GPIO, for a direct-wired build with no Arduino in the loop.
+# lgpio talks to the kernel gpiochip character device, which is the only
+# supported path on a Pi 5 (RPi.GPIO and pigpio cannot work there).
 pi = ["lgpio>=0.2.2.0"]
 pi5 = ["lgpio>=0.2.2.0"]
 gpio = ["lgpio>=0.2.2.0"]  # deprecated alias, kept so old install docs still work

@@ -17,9 +17,19 @@ from .backend import Backend, LgpioBackend, PioBackend, SimulatedBackend
 
 log = logging.getLogger(__name__)
 
-BACKENDS = ("auto", "lgpio", "pio", "simulated", "kinematic")
+BACKENDS = ("auto", "serial", "lgpio", "pio", "simulated", "kinematic")
 #: accepted for configs written against v0.1, when the only real backend was RPi.GPIO
 DEPRECATED_ALIASES = {"gpio": "lgpio"}
+
+#: Substrings that mark a USB serial device as plausibly *our* Arduino, matched
+#: against the /dev/serial/by-id name (which carries the USB product strings).
+#:
+#: This filter is the whole reason ``auto`` is safe to leave on. A ground station
+#: has other USB serial devices — a rig CAT cable is the obvious one — and
+#: probing means opening the port (which resets an Arduino) and writing a HELLO
+#: at it. Doing that to a radio to find out what it is would be rude at best.
+#: Anything not matching here has to be named explicitly in ``rotator.serial.port``.
+FIRMWARE_PORT_MARKERS = ("arduino", "genuino")
 
 
 @dataclass
@@ -28,13 +38,24 @@ class HardwareReport:
     is_raspberry_pi: bool = False
     gpiochips: list[str] = field(default_factory=list)
     lgpio_installed: bool = False
-    pio_device: bool = False
-    pio_binding: bool = False
+    serial_ports: list[str] = field(default_factory=list)
+    pyserial_installed: bool = False
+    #: filled in only by an explicit handshake — probing is a side effect, so it
+    #: never happens as part of a plain probe()
+    serial_ident: object | None = None
     notes: list[str] = field(default_factory=list)
 
     @property
     def can_lgpio(self) -> bool:
         return self.lgpio_installed and bool(self.gpiochips)
+
+    @property
+    def likely_firmware_ports(self) -> list[str]:
+        return [
+            port
+            for port in self.serial_ports
+            if any(marker in port.lower() for marker in FIRMWARE_PORT_MARKERS)
+        ]
 
 
 def probe() -> HardwareReport:
@@ -46,9 +67,16 @@ def probe() -> HardwareReport:
     report.is_raspberry_pi = "raspberry pi" in report.model.lower()
     report.gpiochips = sorted(p.name for p in Path("/dev").glob("gpiochip*"))
     report.lgpio_installed = find_spec("lgpio") is not None
-    report.pio_device = Path("/dev/pio0").exists()
-    report.pio_binding = find_spec("adafruit_rp1pio") is not None
+    report.pyserial_installed = find_spec("serial") is not None
+    from .serial_driver import probe_serial_ports
 
+    report.serial_ports = probe_serial_ports()
+
+    if report.serial_ports and not report.pyserial_installed:
+        report.notes.append(
+            "a USB serial device is present but pyserial is not installed — "
+            "pip install 'orbitaly[serial]' to use backend: serial"
+        )
     if report.is_raspberry_pi and not report.lgpio_installed:
         report.notes.append(
             "lgpio is not installed — pip install 'orbitaly[pi5]' (or apt install python3-lgpio)"
@@ -63,13 +91,22 @@ def probe() -> HardwareReport:
 
 
 def select_backend(requested: str, report: HardwareReport | None = None) -> str:
-    """Resolve a configured backend name to a concrete one."""
+    """Resolve a configured backend name to a concrete one.
+
+    ``auto`` prefers a handshaking Arduino over the Pi's own GPIO, because that
+    is the reference deployment — but only among ports that *look* like an
+    Arduino (see :data:`FIRMWARE_PORT_MARKERS`), and only when pyserial is
+    installed. Any other device has to be named in config, so auto-detection
+    can never go poking at a radio.
+    """
     requested = DEPRECATED_ALIASES.get(requested, requested)
     if requested not in BACKENDS:
         raise ValueError(f"Unknown rotator backend {requested!r}; expected one of {BACKENDS}")
     if requested != "auto":
         return requested
     report = report or probe()
+    if report.pyserial_installed and report.likely_firmware_ports:
+        return "serial"
     if report.can_lgpio and report.is_raspberry_pi:
         return "lgpio"
     return "simulated"
@@ -88,7 +125,11 @@ def make_rotator(config: RotatorConfig, *, clock=None, mechanics=None) -> Rotato
         return SimulatedRotator(config)
 
     backend: Backend
-    if chosen == "lgpio":
+    if chosen == "serial":
+        from .serial_driver import SerialBackend
+
+        backend = SerialBackend(config, clock=clock)
+    elif chosen == "lgpio":
         backend = LgpioBackend(config, clock=clock)
     elif chosen == "pio":
         backend = PioBackend(config, clock=clock)
@@ -102,7 +143,7 @@ def make_rotator(config: RotatorConfig, *, clock=None, mechanics=None) -> Rotato
         # Hardware must prove it knows where it is; a simulator has nothing to
         # crash into, and demanding a homing click there just trains people to
         # click past the interlock.
-        require_homing = chosen in ("lgpio", "pio")
+        require_homing = chosen in ("serial", "lgpio", "pio")
 
     rotator = StepperRotator(config, backend, clock=clock, require_homing=require_homing)
     log.info("Rotator backend: %s", backend.describe())

@@ -41,15 +41,9 @@ def run(config_path: str | None = None) -> int:
     )
     lgpio_note = "installed" if report.lgpio_installed else "missing — pip install 'orbitaly[pi]'"
     lines.append((OK if report.lgpio_installed else WARN, f"lgpio module: {lgpio_note}"))
-    lines.append(
-        (
-            OK if report.pio_device else WARN,
-            f"/dev/pio0 (RP1 PIO): {'present' if report.pio_device else 'absent'}"
-            + ("" if report.pio_binding else " · no Python binding installed"),
-        )
-    )
 
     lines += _permission_lines(report.gpiochips)
+    lines += _serial_lines(report)
 
     requested = config.rotator.backend
     chosen = select_backend(requested, report)
@@ -60,7 +54,10 @@ def run(config_path: str | None = None) -> int:
     if chosen == "simulated" and report.is_raspberry_pi:
         lines.append((WARN, "  This is a Pi but the simulator was selected — nothing will move."))
 
-    lines += _pin_lines(config)
+    if chosen == "serial":
+        lines += _firmware_lines(config)
+    else:
+        lines += _pin_lines(config)
     lines += _travel_lines(config)
     lines.append(
         (
@@ -101,8 +98,120 @@ def run(config_path: str | None = None) -> int:
 
 def _require_homing(config: Config, chosen: str) -> bool:
     if config.rotator.require_homing is None:
-        return chosen in ("lgpio", "pio")
+        return chosen in ("serial", "lgpio", "pio")
     return bool(config.rotator.require_homing)
+
+
+def _serial_lines(report) -> list[tuple[str, str]]:
+    """What USB serial devices are here, and which could be the rotator board."""
+    lines: list[tuple[str, str]] = []
+    if not report.serial_ports:
+        return [(OK, "Serial ports: none")]
+    lines.append((OK, f"Serial ports: {', '.join(report.serial_ports)}"))
+    likely = report.likely_firmware_ports
+    if likely:
+        lines.append((OK, f"  looks like an Arduino: {', '.join(likely)}"))
+    else:
+        # Deliberate: auto-detection will not open a device it cannot identify,
+        # because opening a port writes at whatever is behind it and one of
+        # those devices is quite possibly the radio.
+        lines.append(
+            (
+                WARN,
+                "  none identifiable as an Arduino — set rotator.serial.port explicitly "
+                "to use backend: serial",
+            )
+        )
+    if not report.pyserial_installed:
+        lines.append((WARN, "  pyserial is not installed — pip install 'orbitaly[serial]'"))
+    return lines
+
+
+def _firmware_lines(config: Config) -> list[tuple[str, str]]:
+    """Open the link and print what the board says about itself.
+
+    This is the check that catches a stale flash. The handshake refuses a
+    protocol mismatch, so a board running last month's firmware fails here —
+    with the versions printed — rather than halfway through a pass.
+    """
+    from ..motion.serial_driver import SerialBackend, TransportError
+
+    try:
+        backend = SerialBackend(config.rotator)
+    except TransportError as exc:
+        return [(BAD, f"Firmware: {exc}")]
+
+    lines: list[tuple[str, str]] = []
+    try:
+        ident = backend.ident
+        assert ident is not None
+        port = getattr(backend.transport, "port", "?")
+        lines.append((OK, f"Firmware: {ident.version_str} on {port}, protocol {ident.protocol}"))
+        lines.append(
+            (
+                OK,
+                f"  queue depth {ident.queue_depth}, {ident.axis_count} axes, "
+                f"dir setup {ident.dir_setup_us} us, pulse width {ident.pulse_width_us} us",
+            )
+        )
+        pins = ["-" if p == 0xFF else str(p) for p in ident.pins]
+        lines.append(
+            (
+                OK,
+                f"  Arduino pins az step/dir/en/stop = {'/'.join(pins[:4])}, "
+                f"el = {'/'.join(pins[4:])}",
+            )
+        )
+        from ..motion.serial_protocol import Caps
+
+        conventions = []
+        conventions.append(
+            "endstops NC" if ident.has(Caps.ENDSTOP_NC) else "endstops NO (fails unsafe!)"
+        )
+        conventions.append(
+            "enable active low" if ident.has(Caps.ENABLE_ACTIVE_LOW) else "enable active high"
+        )
+        lines.append(
+            (
+                OK if ident.has(Caps.ENDSTOP_NC) else WARN,
+                "  " + ", ".join(conventions),
+            )
+        )
+        for name, cap in (("azimuth", Caps.AZ_ENDSTOP), ("elevation", Caps.EL_ENDSTOP)):
+            if not ident.has(cap):
+                lines.append(
+                    (
+                        WARN,
+                        f"{name} has no endstop — homing will just accept the current position",
+                    )
+                )
+        if not ident.has(Caps.ESTOP_FITTED):
+            lines.append((WARN, "No E-stop wired to the Arduino (ESTOP_PIN in pins.h)"))
+        alive = backend.ping()
+        lines.append((OK if alive else BAD, "  link round trip" + ("" if alive else " FAILED")))
+        # The per-axis pin config in config.yaml is meaningless on this backend;
+        # saying so is cheaper than somebody editing YAML for an hour.
+        configured = [
+            f"{axis_name}.{role}"
+            for axis_name, axis in (
+                ("azimuth", config.rotator.azimuth),
+                ("elevation", config.rotator.elevation),
+            )
+            for role in ("step", "dir", "enable", "endstop")
+            if getattr(axis.pins, role) >= 0
+        ]
+        if configured:
+            lines.append(
+                (
+                    WARN,
+                    "config.yaml sets Pi GPIO pins ("
+                    + ", ".join(configured)
+                    + ") which backend: serial ignores — those live in firmware/pins.h",
+                )
+            )
+    finally:
+        backend.close()
+    return lines
 
 
 def _permission_lines(gpiochips: list[str]) -> list[tuple[str, str]]:

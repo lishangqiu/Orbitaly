@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from .config import Config
+from .core.bands import band_status, effective_mask_deg
 from .core.predictor import Observation, Predictor
 from .core.tle import TleManager
 from .core.scheduler import Scheduler
@@ -27,6 +28,10 @@ class Services:
 
     def __init__(self, config: Config):
         self.config = config
+        # Normalized once at startup: bad YAML should fail here, loudly, not
+        # per request on a station that is already flying a pass.
+        self.bands = config.station.band_list()
+        self.mask_deg = effective_mask_deg(config)
         self.tle = TleManager(config.tle, config.transponder_overrides)
         self.predictor = Predictor(config.station)
         self.rotator = make_rotator(config.rotator)
@@ -83,6 +88,27 @@ class Services:
             "footprint_km": round(obs.footprint_km, 0),
             "sunlit": obs.sunlit,
             "transponders": entries,
+        }
+
+    def station_dict(self) -> dict:
+        """Where we are and what we can work.
+
+        The map draws its range ring from this rather than hardcoding a QTH,
+        and `mask_deg` is what it may call "in view" — never lower than the
+        elevation the tracker itself will schedule.
+        """
+        station = self.config.station
+        return {
+            "name": station.name,
+            "latitude": station.latitude,
+            "longitude": station.longitude,
+            "altitude_m": station.altitude_m,
+            "min_workable_elevation_deg": station.min_workable_elevation_deg,
+            "mask_deg": self.mask_deg,
+            "bands": [
+                {"min_hz": b.min_hz, "max_hz": b.max_hz, "tx": b.tx, "rx": b.rx}
+                for b in self.bands
+            ],
         }
 
     # -- 2 m band doppler ---------------------------------------------------
@@ -167,6 +193,7 @@ class Services:
                 tracked = {
                     "norad_id": norad_id,
                     "name": sat.name,
+                    "band": band_status(sat.transponders, self.bands),
                     "observation": self.observation_dict(obs, sat.transponders),
                 }
                 current_pass = self.tracker.current_pass
@@ -174,11 +201,7 @@ class Services:
                     tracked["pass"] = pass_dict(current_pass, include_profile=True)
         return {
             "time": time.time(),
-            "station": {
-                "name": self.config.station.name,
-                "latitude": self.config.station.latitude,
-                "longitude": self.config.station.longitude,
-            },
+            "station": self.station_dict(),
             "tracker": {
                 "state": self.tracker.state.value,
                 "wrap_warning": self.tracker.wrap_warning,

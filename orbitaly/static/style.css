@@ -14,7 +14,13 @@
   --grid: #2c2c2a;
   --axis: #383835;
   --series-1: #3987e5;   /* satellite + pass track */
-  --series-2: #d95926;   /* antenna pointing */
+  --series-2: #d95926;   /* antenna pointing — free on the map, which has no antenna */
+  /* Extension for the map's display set: hues chosen to stay separable under
+     deuteranopia and protanopia, which is why there is no red/green pair. */
+  --series-3: #2eae8e;
+  --series-4: #c07fd0;
+  --series-5: #d4b02c;
+  --series-6: #5fc4d8;
   --status-good: #0ca30c;
   --status-warn: #fab219;
   --status-serious: #ec835a;
@@ -64,7 +70,15 @@ main {
   min-height: 0;
 }
 @media (max-width: 1100px) {
-  main { grid-template-columns: 1fr; overflow-y: auto; }
+  /* Stacked into one scrolling column, each panel as tall as its content.
+     Without max-content the rows share the viewport height instead, and a
+     panel whose content does not fit spills its last few rows out past its
+     own border — visible as a legend line floating below the map. */
+  main {
+    grid-template-columns: 1fr;
+    grid-auto-rows: max-content;
+    overflow-y: auto;
+  }
 }
 
 .panel {
@@ -135,10 +149,64 @@ main {
 }
 .el-badge.up { color: var(--status-good); font-weight: 600; }
 
+/* Pinning is a view preference, not station state: it lives in localStorage
+   and only decides what the map draws. Hidden until hover, so a list of
+   hundreds of rows does not turn into a wall of controls. */
+.pin {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+}
+.pin::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--ink-3);
+  border-radius: 50%;
+}
+.sat-row:hover .pin { opacity: 1; }
+.pin:hover::before { border-color: var(--ink); }
+.pin.on { opacity: 1; }
+.pin.on::before { background: var(--ink-2); border-color: var(--ink-2); }
+
 /* ---------- sky panel ---------- */
 
 #sky-panel { align-items: center; }
-#skyplot { max-width: 100%; height: auto; }
+.view { width: 100%; display: flex; flex-direction: column; align-items: center; }
+.view[hidden] { display: none; }
+
+/* Both canvases size themselves in CSS pixels and take their backing store
+   from devicePixelRatio, so neither is blurry on a hiDPI screen. */
+#skyplot { width: min(520px, 100%); aspect-ratio: 1 / 1; }
+#worldmap { width: 100%; aspect-ratio: 2 / 1; cursor: crosshair; }
+
+/* Sky | Map. Two views of the same pass: the sky plot is what you operate
+   from, the map is what you plan from, so Sky stays the default. */
+.view-tabs { display: inline-flex; gap: 2px; }
+.view-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 8px 4px;
+  cursor: pointer;
+}
+.view-tab:hover { color: var(--ink-2); }
+.view-tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--series-1); }
+
 .sky-legend {
   display: flex;
   gap: 16px;
@@ -146,10 +214,51 @@ main {
   color: var(--ink-3);
   margin: 2px 0 6px;
 }
+.sky-legend { flex-wrap: wrap; }
 .sky-legend .key { display: inline-flex; align-items: center; gap: 5px; }
 .key-line { width: 14px; height: 2px; background: var(--series-1); border-radius: 1px; }
 .key-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--series-1); }
 .key-cross { color: var(--series-2); font-weight: 700; font-size: 12px; line-height: 1; }
+/* Map legend: the three weights a track is drawn at, plus the two chrome
+   marks. The opacities track what drawMap() actually strokes — the projection
+   sits between the trail and the in-view emphasis, so the swatches have to as
+   well or the legend teaches the wrong hierarchy. */
+.key-line.behind { opacity: 0.35; }
+.key-line.ahead { opacity: 0.65; }
+.key-line.inview { height: 3px; }
+/* A committed pass: a full-weight stretch of track with squared-off ends.
+   The end marks are absolutely positioned inside the swatch's own box so they
+   cannot bleed into the label beside it. */
+.key-sched {
+  position: relative;
+  width: 16px;
+  height: 3px;
+  background: var(--series-1);
+}
+.key-sched::before,
+.key-sched::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  width: 5px;
+  height: 5px;
+  background: var(--series-1);
+}
+.key-sched::before { left: 0; }
+.key-sched::after { right: 0; }
+.key-ring {
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--series-1);
+  border-radius: 50%;
+  opacity: 0.65;
+}
+.key-station {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--ink-2);
+  transform: rotate(45deg);
+}
 #tracked-info { font-size: 12px; color: var(--ink-3); text-align: center; min-height: 18px; font-variant-numeric: tabular-nums; }
 
 #passes-box { width: 100%; flex: 1; min-height: 80px; display: flex; flex-direction: column; margin-top: 8px; }

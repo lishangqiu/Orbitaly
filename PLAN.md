@@ -309,6 +309,17 @@ Python out of the timing loop and makes step counts — and therefore position �
 exact regardless of jitter. RP1 PIO fits the same interface and remains the
 quality tier; it needs a hardware spike before anything depends on it.
 
+That segment boundary turned out to matter more than expected. The reference
+station does not wire the drivers to the Pi at all — it goes
+`Pi ──USB──▶ Arduino ──step/dir──▶ drivers` — and a segment is already a
+compact, self-contained wire message, so the `serial` backend slotted in at the
+same seam with the planner untouched. It is also strictly better on one point:
+a microcontroller counts its own ISR ticks, so an abort reports an **exact**
+executed count where lgpio can only say "somewhere in this segment". Design and
+protocol: `firmware/README.md`; the firmware itself is an exact pulse executor
+with no trajectory intelligence in it, which is the whole distinction from
+K3NG-style rotator controllers.
+
 ## 10. Roadmap beyond v1
 
 - RP1 PIO backend: hardware-exact pulse timing for silent high-microstep drives

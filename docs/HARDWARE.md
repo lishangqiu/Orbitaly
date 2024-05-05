@@ -19,11 +19,20 @@ number of pulses hardware reports as executed, never from elapsed time.
 
 | Backend | Timing | Exact counts | Where it runs |
 |---|---|---|---|
-| `lgpio` | C thread, µs resolution | yes | **Any Pi, including Pi 5** |
+| `serial` | Arduino timers | yes, **and exact on abort** | **the reference build** |
+| `lgpio` | C thread, µs resolution | yes | any Pi, including Pi 5 — direct-wired |
 | `pio` | RP1 hardware | yes | Pi 5 — *not implemented yet* |
 | `simulated` | virtual | yes | anywhere |
 | ~~pigpio~~ | DMA | yes | Pi 4 and older only — **cannot work on Pi 5** |
 | ~~RPi.GPIO~~ | Python | — | **broken on Pi 5** |
+
+The "exact on abort" column is the one real behavioural difference. lgpio
+cannot say how many pulses of a cut `tx_pulse` train reached the motor, so an
+abort there loses the position reference and forces a re-home. A
+microcontroller counts its own ISR ticks and reports the exact figure, so an
+endstop hit no longer costs you homing. An E-stop still does — not because the
+count is unknown, but because it drops the enable lines, and an unpowered
+stepper under wind load holds nothing.
 
 ### Why not pigpio or RPi.GPIO
 
@@ -45,7 +54,39 @@ idea how many cycles it emitted. Without an exact count there is no position,
 so it is not usable for a step generator. Mentioned here because it looks
 attractive right up until you need to know where the antenna is.
 
-## Wiring
+## Wiring — the reference build (`backend: serial`)
+
+```
+Pi ──USB──▶ Arduino ──step/dir/enable──▶ A4988/DRV8825/TMC2209 ──▶ NEMA17/23 ──▶ gearbox ──▶ antenna
+              ▲                                                                       │
+              └─────────────── endstop switch (normally closed) ◀────────────────────┘
+```
+
+Pin map (Arduino digital pins, from `firmware/orbitaly_rotator/pins.h`):
+
+| Signal | Azimuth | Elevation |
+|---|---|---|
+| step | 2 | 6 |
+| dir | 3 | 7 |
+| enable | 4 | 8 |
+| endstop | 5 | 9 |
+
+E-stop on pin 10. All of these are reported back in the handshake, so
+`orbitaly doctor` prints the pinout the board is actually running rather than
+the one somebody wrote down.
+
+**These pins live in `pins.h`, not in `config.yaml`.** The per-axis `pins:`
+keys in YAML apply to the direct-wired build only, and `doctor` warns if you
+set them while running `backend: serial`. Everything about the *mechanism* —
+gear ratios, travel limits, speeds, backlash, homing — stays on the Pi
+regardless of backend; the Arduino does not know that degrees exist. Flashing
+and the auto-reset gotcha are covered in
+[../firmware/README.md](../firmware/README.md).
+
+Grounds must be common between the Arduino, the drivers and the motor supply.
+The Arduino's 5 V will not run motors; the drivers take their own supply.
+
+## Wiring — the direct-wired build (`backend: lgpio`)
 
 ```
 Pi GPIO ──step/dir/enable──▶ A4988/DRV8825/TMC2209 ──▶ NEMA17/23 ──▶ gearbox ──▶ antenna
@@ -98,16 +139,35 @@ motion *toward* that limit while still allowing you to jog away.
 | Watchdog | `watchdog_s` | Stops if whatever was steering stops heartbeating |
 | Idle disable | `idle_disable_s` | Releases motor current at rest (a worm drive holds; a spur drive does not) |
 
-**Emergency stops cost you your position reference.** Cutting a pulse train
-mid-segment means the backend cannot say how many of those pulses the motor
-received. Rather than carry on with soft limits measured from a number that
-might be wrong, the axis drops its homed flag and demands re-homing. Ordinary
-retargeting never does this: a new target is planned from the end of what
-hardware has already been given, so nothing in flight is ever discarded.
+With `backend: serial` the endstop and E-stop reflexes live on the Arduino,
+because that is the board physically next to the motors: it reacts at interrupt
+latency and reports what it did. The *policy* stays on the Pi — the latched
+fault, the HTTP 409, the demand to re-home — so there is exactly one thing to
+clear and one place that decides when motion may resume.
+
+**Emergency stops cost you your position reference.** On a direct-wired build,
+cutting a pulse train mid-segment means the backend cannot say how many of
+those pulses the motor received. Rather than carry on with soft limits measured
+from a number that might be wrong, the axis drops its homed flag and demands
+re-homing. Ordinary retargeting never does this: a new target is planned from
+the end of what hardware has already been given, so nothing in flight is ever
+discarded.
+
+With an Arduino in the loop the count comes back exact, so an **endstop hit
+keeps your homing**. An E-stop still demands re-homing, for the different
+reason given above: the enable lines drop, and an unpowered stepper does not
+hold position.
 
 ## Commissioning order
 
 Do not skip to the end. Each step assumes the previous one passed.
+
+**0. Flash the Arduino** (serial build only), once, at the bench:
+
+```bash
+arduino-cli compile --fqbn arduino:avr:uno firmware/orbitaly_rotator
+arduino-cli upload  --fqbn arduino:avr:uno -p /dev/ttyACM0 firmware/orbitaly_rotator
+```
 
 **1. Check the machine.**
 
@@ -116,13 +176,32 @@ orbitaly doctor -c /etc/orbitaly/config.yaml
 ```
 
 Confirm it picked the backend you expect. If it says `simulated` on a Pi,
-something is wrong — usually a missing `lgpio` or a user not in the `gpio`
-group — and nothing will move.
+something is wrong — a missing `lgpio`, a user not in the `gpio` group, or an
+Arduino that is not plugged in — and nothing will move.
 
-**2. Measure the pulse train, motors disconnected.**
+On the serial build, doctor also opens the link and prints the firmware
+version, its pinout and its wiring conventions. **Check the version.** The
+handshake refuses a protocol mismatch, so a stale flash fails here rather than
+halfway through a pass — but a board running compatible-but-old firmware with
+the wrong pins in it will start up perfectly and drive the wrong wires.
 
-Unplug the motors from the drivers. Jumper the azimuth step output to a spare
-input, then:
+**2. Measure, motors disconnected.**
+
+Unplug the motors from the drivers.
+
+*Serial build:*
+
+```bash
+orbitaly selftest --serial
+```
+
+Round-trip latency, flow control under a deliberate queue overrun, resync after
+deliberate corruption, and whether the firmware's reported step counts match
+what was commanded. Note what this does **not** prove: the pulse train itself.
+The accounting being exact and the electrical output being right are different
+claims, and only a scope on the STEP pin settles the second one.
+
+*Direct-wired build:* jumper the azimuth step output to a spare input, then:
 
 ```bash
 orbitaly selftest --loopback --axis az --pin 6

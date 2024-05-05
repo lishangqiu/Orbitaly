@@ -4,9 +4,11 @@ Antenna-tracker control software for amateur-radio ground stations.
 
 Like **gpredict**, but with a modern real-time web UI, doppler-corrected
 frequency readouts, smart azimuth unwrapping for overhead passes — and
-**direct stepper-motor control**: Orbitaly generates the step/dir pulses,
-acceleration ramps, homing, soft limits, and backlash compensation itself.
-No gcode, no motion-controller firmware, no rotctld required.
+**direct stepper-motor control**: Orbitaly generates the trajectories, step/dir
+pulse trains, acceleration ramps, homing, soft limits, and backlash
+compensation itself. No gcode, no rotctld required, and **no motion
+intelligence in firmware** — where an Arduino is used to emit the pulses, it is
+an exact pulse executor with no opinion about where the antenna should point.
 
 See [PLAN.md](PLAN.md) for the full architecture and design document.
 
@@ -25,10 +27,11 @@ See [PLAN.md](PLAN.md) for the full architecture and design document.
   144–148 MHz and get live TX/RX corrected frequencies, shift, and drift
   rate (Hz/s) for the tracked satellite — the numbers you dial into the rig
 - **Direct stepper integration**: trapezoidal ramps, endstop homing, gear
-  ratios, microstepping, backlash compensation — driven straight from
-  Raspberry Pi GPIO (A4988 / DRV8825 / TMC step-dir drivers). Pulses are
-  generated as hardware-timed *segments*, not from a Python loop, so step
-  counts are exact on a Pi 5 and Python never sits in the timing path
+  ratios, microstepping, backlash compensation (A4988 / DRV8825 / TMC step-dir
+  drivers). Pulses are generated as hardware-timed *segments*, not from a
+  Python loop, so step counts are exact and Python never sits in the timing
+  path. Segments go either to an **Arduino over USB** (the reference build) or
+  to the **Pi's own GPIO** via lgpio — the planner above them is identical
 - **Rig control**: automatic doppler tuning of a real radio through hamlib's
   `rigctld` — full-duplex TX/RX correction with per-mode deadbands
 - **rotctld server**: Orbitaly speaks hamlib's rotator protocol, so gpredict
@@ -40,6 +43,12 @@ See [PLAN.md](PLAN.md) for the full architecture and design document.
   demands re-homing after an emergency stop rather than guessing
 - **Web dashboard**: polar sky plot, satellite catalog, pass timeline, manual
   jog/goto controls — works from any browser on the LAN, including a phone
+- **World map view**: ground tracks and projected paths, per-satellite
+  acquisition rings, day/night terminator, and the slice of orbit the
+  scheduler has committed to. Coastlines are vendored, so it works with no
+  internet at all. It highlights a pass as *in view* only when the geometry
+  clears your horizon **and** a transponder lands in a band you configured —
+  so it will not offer you a 70 cm bird on a 2 m station
 - **Simulation mode**: the same planner, supervisor and interlocks that run on
   the Pi, driving a virtual rotator; develop and demo with no hardware
 
@@ -61,19 +70,23 @@ python -m orbitaly -c config.yaml
 ```
 
 The example file documents every option: station coordinates, TLE sources,
-rotator backend (`simulated` or `gpio`), and per-axis stepper hardware
-(pins, steps/rev, microstepping, gear ratio, travel limits, homing, backlash).
+rotator backend (`serial`, `lgpio` or `simulated`), and per-axis stepper
+hardware (steps/rev, microstepping, gear ratio, travel limits, homing,
+backlash). With `backend: serial` the Arduino's pin assignments live in
+`firmware/orbitaly_rotator/pins.h` instead of in YAML, and the board reports
+them in its handshake so `orbitaly doctor` prints what is really running.
 
 ## Hardware
 
-The reference deployment is a Raspberry Pi 5 wired to two step/dir stepper
-drivers (azimuth + elevation) through worm or spur gear reductions, with
-normally-closed endstop switches for homing and limits:
+The reference deployment is a Raspberry Pi 5 talking over USB to an Arduino,
+whose pins drive two step/dir stepper drivers (azimuth + elevation) through
+worm or spur gear reductions, with normally-closed endstop switches for homing
+and limits:
 
 ```
-Pi GPIO ──step/dir/enable──▶ A4988/DRV8825/TMC ──▶ NEMA17/23 ──▶ gearbox ──▶ antenna
-   ▲                                                                │
-   └────────── endstop switch (homing + live limit) ◀───────────────┘
+Pi ──USB──▶ Arduino ──step/dir/enable──▶ A4988/DRV8825/TMC ──▶ NEMA17/23 ──▶ gearbox ──▶ antenna
+              ▲                                                                  │
+              └──────── endstop switch (homing + live limit) ◀───────────────────┘
 ```
 
 Orbitaly generates motion as **segments** — `(direction, step count, period)`
@@ -82,13 +95,45 @@ runs at tens of hertz feeding segments rather than thousands of hertz toggling
 a pin, so step counts are exact and timing jitter costs smoothness, never
 position.
 
-On a Pi 5 this goes through `lgpio` and the kernel's gpiochip interface.
+A direct-wired build with no Arduino is also supported: the same segments go to
+the Pi's own GPIO through `lgpio` and the kernel's gpiochip interface.
 **RPi.GPIO and pigpio cannot work on a Pi 5** — the RP1 southbridge moved the
 pins out from under both of them — so neither is used any more. An RP1 PIO
 backend for hardware-exact timing is designed but not yet implemented.
 
-Before connecting anything that can break itself, run `orbitaly doctor` and
-work through the commissioning order in [docs/HARDWARE.md](docs/HARDWARE.md).
+### Not a motion controller
+
+"Raspberry Pi plus Arduino antenna tracker" describes a hundred projects that
+work nothing like this one. The difference is where the trajectory is decided.
+
+K3NG-style firmware and Easycomm/GS-232 boxes accept **position targets** — "go
+to az 137" — and do their own ramping and pursuit. That is why such setups
+lurch: the controller re-decides the trajectory every time a new bearing lands,
+has no committed queue to replan from, and reports position by its own
+reckoning that the host cannot audit. Orbitaly's firmware
+([firmware/](firmware/)) is the opposite: a dumb, exact pulse executor. All
+trajectory intelligence stays on the Pi, under test.
+
+| | gpredict + a typical rotctld box | Orbitaly |
+|---|---|---|
+| Trajectory | none (bearing spam) | planned ramps, replanned from the committed queue |
+| Position truth | the controller's own claim | pulse counts audited end to end |
+| Link loss mid-pass | whatever the firmware decides | drains to rest at a known position |
+| Endstop hit | firmware-dependent, often none | µs abort in firmware, exact count, latched fault in the UI |
+| Can the radio hear it? | not modelled | band gate; the map refuses to promise unhearable passes |
+| Unattended operation | none | scheduler with watchdog and human-takeover handback |
+| Doppler | client-side, per tool | rig CAT tuning, sign conventions under test |
+
+And because Orbitaly *provides* a rotctld server, gpredict can be demoted to an
+optional client of Orbitaly's hardware — interoperability without equivalence.
+
+Flash the board once with `arduino-cli` (see [firmware/README.md](firmware/README.md));
+the handshake refuses a protocol mismatch, so a stale flash fails in
+`orbitaly doctor` rather than halfway through a pass.
+
+Before connecting anything that can break itself, run `orbitaly doctor`, then
+`orbitaly selftest --serial` with the motors disconnected, and work through the
+commissioning order in [docs/HARDWARE.md](docs/HARDWARE.md).
 
 ## Deployment
 
@@ -107,6 +152,7 @@ Everything the UI does goes through a plain JSON API you can script against:
 |---|---|
 | `GET /api/satellites` | catalog with live az/el, sorted by elevation |
 | `GET /api/satellites/{id}/passes?hours=24` | pass predictions with az/el profiles |
+| `GET /api/satellites/{id}/groundtrack` | subpoints + station elevation; window follows the TLE's own period |
 | `GET /api/status` | tracker + rotator + TLE snapshot |
 | `POST /api/track/{id}` / `POST /api/track/stop` | engage / disengage tracking |
 | `POST /api/rotator/goto` `{"az":180,"el":45}` | manual pointing |

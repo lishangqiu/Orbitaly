@@ -3,9 +3,30 @@
 
 station:
   name: "Home QTH"
+  # Set these to your real position before trusting anything on screen. The
+  # map view draws its range ring, its in-view highlighting and every
+  # elevation number from here, so a placeholder QTH is not merely imprecise —
+  # it is confidently wrong.
   latitude: 40.4406        # decimal degrees, north positive
   longitude: -79.9959      # decimal degrees, east positive
   altitude_m: 300
+
+  # The lowest elevation you can actually work: trees, terrain, local noise.
+  # This is a horizon, not a link budget — a 6-element yagi on LEO is
+  # geometry-limited, not gain-limited, so the horizon is what sets range.
+  # The map takes the higher of this and tracker.min_elevation_deg, so it can
+  # never promise a pass the tracker itself would refuse to schedule.
+  min_workable_elevation_deg: 5.0
+
+  # What the radio can reach. A satellite is only shown as in view if one of
+  # its transponders lands in one of these ranges — which is what stops the
+  # map offering SO-50 (436.795 MHz downlink) to a 2 m-only station. Listing
+  # a band with `tx: false` describes a receive-only capability, and the map
+  # will say "receive only" rather than claiming a two-way contact.
+  bands:
+    - {min_hz: 144000000, max_hz: 148000000, tx: true, rx: true}
+    # A 70 cm station would add:
+    # - {min_hz: 430000000, max_hz: 440000000, tx: true, rx: true}
 
 tle:
   sources:
@@ -67,13 +88,30 @@ scheduler:
   park_after_idle_s: 0     # 0 = stay put between passes
 
 rotator:
-  # auto     pick the best backend for this machine (lgpio on a Pi, else simulated)
-  # lgpio    Raspberry Pi via the kernel gpiochip device — the only supported
+  # auto     pick the best backend for this machine: an Arduino running our
+  #          firmware if one is plugged in, else lgpio on a Pi, else simulated
+  # serial   Pi ──USB──▶ Arduino ──step/dir──▶ drivers. The reference build.
+  # lgpio    Raspberry Pi driving the step/dir inputs from its own GPIO — for a
+  #          direct-wired build with no Arduino. The only supported *Pi-side*
   #          hardware path on a Pi 5, since RPi.GPIO and pigpio cannot run there
   # pio      RP1 PIO, hardware-timed (not implemented yet — see docs/HARDWARE.md)
   # simulated  no hardware, but the full planner and safety logic
   backend: auto
   gpiochip: -1             # -1 = find the header chip by label (it renumbers between kernels)
+
+  # -- the USB link to the Arduino (backend: serial only) -----------------
+  # The Arduino is an exact pulse executor and nothing more: it holds no gear
+  # ratios, no travel limits, no speeds. Those all stay below, on the Pi.
+  # Its *pin* assignments are the one genuinely per-build hardware fact, and
+  # they live in firmware/orbitaly_rotator/pins.h — the per-axis `pins:` keys
+  # below are ignored on this backend, and `orbitaly doctor` warns if you set
+  # them anyway. The firmware reports its pinout in the handshake, so doctor
+  # prints what the board is really running.
+  serial:
+    port: auto             # or /dev/serial/by-id/usb-Arduino... — by-id survives a replug,
+                           # and auto only ever opens a device that identifies as an Arduino
+    baud: 115200
+    connect_timeout_s: 5   # covers the ~2 s bootloader delay after opening the port resets the board
 
   # -- safety -------------------------------------------------------------
   estop_pin: -1            # BCM pin, wired normally-closed to ground; -1 = none
@@ -81,7 +119,10 @@ rotator:
   idle_disable_s: 0        # release motor current after this long at rest (0 = hold)
   watchdog_s: 5            # stop if whatever is steering stops heartbeating
 
-  # -- direct stepper drive (Raspberry Pi BCM pin numbers) ----------------
+  # -- the axes themselves ------------------------------------------------
+  # Everything here is a fact about the *mechanism*, so it stays on the Pi
+  # whichever backend emits the pulses. `pins:` is the exception: it is Pi BCM
+  # numbering and applies to backend: lgpio only (see rotator.serial above).
   azimuth:
     min_deg: -90           # extended travel avoids mid-pass 360° slews
     max_deg: 450

@@ -75,14 +75,30 @@ def separation_deg(az1: float, el1: float, az2: float, el2: float) -> float:
 class PassRun:
     """Runs one pass and records what the antenna actually did."""
 
-    def __init__(self, aos: float, config: RotatorConfig | None = None, lead_s: float = 120.0):
+    def __init__(
+        self,
+        aos: float,
+        config: RotatorConfig | None = None,
+        lead_s: float = 120.0,
+        backend_factory=None,
+    ):
         config = config or rotator_config()
         self.clock = VirtualClock()
         self.mechanics = {
             "az": VirtualAxis(steps_per_deg=config.azimuth.steps_per_deg),
             "el": VirtualAxis(steps_per_deg=config.elevation.steps_per_deg),
         }
-        backend = SimulatedBackend(mechanics=self.mechanics, clock=self.clock)
+        # `backend_factory` exists so the identical pass can be flown against a
+        # different pulse source — see test_serial_passes.py, which re-runs this
+        # accuracy table through the Arduino backend. Returns (backend, hook),
+        # where the hook runs immediately before each motion tick so a backend
+        # with its own hardware model can be stepped in lockstep.
+        if backend_factory is None:
+            backend = SimulatedBackend(mechanics=self.mechanics, clock=self.clock)
+            self.before_motion_tick = lambda: None
+        else:
+            backend, self.before_motion_tick = backend_factory(config, self.mechanics, self.clock)
+        self.backend = backend
         self.rotator = StepperRotator(config, backend, clock=self.clock, require_homing=False)
         for axis in self.rotator.axes:
             axis._set_enabled(True)
@@ -105,6 +121,7 @@ class PassRun:
             self.tracker._tick()
             for _ in range(slices):
                 self.clock.advance(motion_tick)
+                self.before_motion_tick()
                 self.rotator.tick()
             self.sim_time += 1.0
             self._sample()

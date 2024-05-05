@@ -8,6 +8,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..app import pass_dict
+from ..core.bands import band_status
+from ..core.predictor import default_ground_track_window, trim_to_below_mask
 from ..motion.errors import MotionBlocked
 from .deps import get_services
 
@@ -44,20 +46,28 @@ class RigRequest(BaseModel):
 def list_satellites(request: Request):
     services = get_services(request)
     now = time.time()
+    sats = services.tle.satellites
+    # One pass over the whole catalog rather than an observe() per satellite:
+    # this runs on a timer, on a host that is also feeding motion segments.
+    observations = services.predictor.observe_many(sats.values(), now)
+    bands = services.bands
     result = []
-    for sat in services.tle.satellites.values():
-        try:
-            obs = services.predictor.observe(sat, now)
-        except Exception:
-            continue  # bad/decayed TLE
+    for norad_id, obs in observations.items():
+        sat = sats[norad_id]
         result.append(
             {
-                "norad_id": sat.norad_id,
+                "norad_id": norad_id,
                 "name": sat.name,
                 "azimuth": round(obs.azimuth, 1),
                 "elevation": round(obs.elevation, 1),
                 "range_km": round(obs.range_km, 0),
+                # Subpoint, so the map can place every satellite it already
+                # polls without a ground-track fetch each.
+                "latitude": round(obs.latitude, 3),
+                "longitude": round(obs.longitude, 3),
+                "altitude_km": round(obs.altitude_km, 1),
                 "has_transponders": bool(sat.transponders),
+                "band": band_status(sat.transponders, bands),
             }
         )
     result.sort(key=lambda s: -s["elevation"])
@@ -88,6 +98,83 @@ def satellite_passes(norad_id: int, request: Request, hours: float = 24.0):
     passes = services.predictor.next_passes(sat, time.time(), hours=hours, min_elevation=0.0)
     visible = [p for p in passes if p.max_elevation >= min_el]
     return {"passes": [pass_dict(p, include_profile=True) for p in visible]}
+
+
+@router.get("/satellites/{norad_id}/groundtrack")
+def satellite_ground_track(
+    norad_id: int,
+    request: Request,
+    minutes_behind: float | None = None,
+    minutes_ahead: float | None = None,
+    step_s: float | None = None,
+):
+    """Subpoints and station elevation across a window around now.
+
+    With no parameters the window is derived from the TLE's own mean motion —
+    a quarter orbit behind, one orbit ahead — so a high orbit gets its whole
+    track and a LEO bird does not get a needlessly dense one. A little past one
+    orbit is sampled and then trimmed back to a below-mask sample, so the
+    projection ends under the horizon rather than at an arbitrary instant that
+    can fall in the middle of a station pass.
+    """
+    services = get_services(request)
+    sat = services.tle.get(norad_id)
+    if sat is None:
+        raise HTTPException(404, f"Unknown satellite {norad_id}")
+
+    period_s = services.predictor.orbital_period_s(sat)
+    window = default_ground_track_window(period_s)
+    behind_s, ahead_s, step = window.behind_s, window.ahead_s, window.step_s
+    # An explicit window is the caller saying exactly where the track should
+    # end, so it is honoured exactly — which is also how the mid-pass terminus
+    # this trim exists to prevent gets reproduced in a browser.
+    trim_after_s = window.trim_after_s
+    if minutes_behind is not None:
+        behind_s = _clamp(minutes_behind, 0.0, 24 * 60.0, "minutes_behind") * 60.0
+    if minutes_ahead is not None:
+        ahead_s = _clamp(minutes_ahead, 0.0, 24 * 60.0, "minutes_ahead") * 60.0
+        trim_after_s = None
+    if step_s is not None:
+        step = _clamp(step_s, 1.0, 3600.0, "step_s")
+    if behind_s + ahead_s <= 0.0:
+        raise HTTPException(422, "Ground-track window is empty")
+
+    now = time.time()
+    try:
+        points = services.predictor.ground_track(sat, now - behind_s, now + ahead_s, step)
+    except Exception as exc:  # a decayed element set that will not propagate
+        raise HTTPException(422, f"Cannot propagate {sat.name}: {exc}") from exc
+    if not points:
+        raise HTTPException(422, "Ground-track window is empty")
+    if trim_after_s is not None:
+        points = trim_to_below_mask(points, now + trim_after_s, services.mask_deg)
+
+    now_index = min(range(len(points)), key=lambda i: abs(points[i].time - now))
+    return {
+        "norad_id": sat.norad_id,
+        "name": sat.name,
+        "period_s": round(period_s, 1),
+        # The step actually used: `ground_track` widens it rather than truncate
+        # a window that would otherwise exceed the sample cap.
+        "step_s": round((points[1].time - points[0].time) if len(points) > 1 else step, 3),
+        "now_index": now_index,
+        "points": [
+            {
+                "t": round(p.time, 1),
+                "lat": round(p.latitude, 3),
+                "lon": round(p.longitude, 3),
+                "alt_km": round(p.altitude_km, 1),
+                "el": round(p.elevation, 2),
+            }
+            for p in points
+        ],
+    }
+
+
+def _clamp(value: float, low: float, high: float, label: str) -> float:
+    if not low <= value <= high:
+        raise HTTPException(422, f"{label} must be between {low:g} and {high:g}")
+    return value
 
 
 @router.get("/status")

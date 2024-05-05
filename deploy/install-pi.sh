@@ -19,7 +19,7 @@ fi
 model=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo "unknown")
 echo "Installing Orbitaly on: ${model}"
 case "${model}" in
-    *"Raspberry Pi 5"*|*"Raspberry Pi 500"*)
+    *"Raspberry Pi 5"*)
         echo "  Pi 5 detected — using lgpio (RPi.GPIO and pigpio cannot work on RP1)." ;;
     *"Raspberry Pi"*)
         echo "  Using lgpio via the kernel gpiochip interface." ;;

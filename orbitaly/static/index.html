@@ -31,13 +31,36 @@
     </section>
 
     <section class="panel" id="sky-panel">
-      <div class="panel-title"><span>Sky view</span><span id="tracker-chip" class="chip">idle</span></div>
-      <canvas id="skyplot" width="520" height="520"></canvas>
-      <div class="sky-legend">
-        <span class="key"><span class="key-line"></span>Pass track</span>
-        <span class="key"><span class="key-dot"></span>Satellite</span>
-        <span class="key"><span class="key-cross">+</span>Antenna</span>
+      <div class="panel-title">
+        <span class="view-tabs" role="tablist" aria-label="Center view">
+          <button class="view-tab" id="tab-sky" role="tab" aria-controls="view-sky" aria-selected="true">Sky</button>
+          <button class="view-tab" id="tab-map" role="tab" aria-controls="view-map" aria-selected="false">Map</button>
+        </span>
+        <span id="tracker-chip" class="chip">idle</span>
       </div>
+
+      <div id="view-sky" class="view" role="tabpanel" aria-labelledby="tab-sky">
+        <canvas id="skyplot"></canvas>
+        <div class="sky-legend">
+          <span class="key"><span class="key-line"></span>Pass track</span>
+          <span class="key"><span class="key-dot"></span>Satellite</span>
+          <span class="key"><span class="key-cross">+</span>Antenna</span>
+        </div>
+      </div>
+
+      <div id="view-map" class="view" role="tabpanel" aria-labelledby="tab-map" hidden>
+        <canvas id="worldmap"></canvas>
+        <div class="sky-legend">
+          <span class="key"><span class="key-line ahead"></span>Projected path</span>
+          <span class="key"><span class="key-line behind"></span>Ground track</span>
+          <span class="key"><span class="key-line inview"></span>In view</span>
+          <span class="key"><span class="key-sched"></span>Scheduled</span>
+          <span class="key"><span class="key-ring"></span>Est. range</span>
+          <span class="key"><span class="key-station"></span>Station</span>
+          <span id="map-count" class="dim"></span>
+        </div>
+      </div>
+
       <div id="tracked-info"></div>
       <div id="passes-box">
         <div class="panel-title">
@@ -114,6 +137,7 @@
     </section>
   </main>
 
+  <script src="/geo.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

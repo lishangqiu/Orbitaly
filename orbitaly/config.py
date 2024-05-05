@@ -19,11 +19,59 @@ DEFAULT_TLE_SOURCES = [
 
 
 @dataclass
+class BandConfig:
+    """One frequency range the station can actually work.
+
+    Receive and transmit are separate flags because an RX-only station is a
+    perfectly ordinary thing to run, and it changes what the map may claim.
+    """
+
+    min_hz: float = 0.0
+    max_hz: float = 0.0
+    tx: bool = True
+    rx: bool = True
+
+    def contains(self, hz: float | None) -> bool:
+        return hz is not None and self.min_hz <= hz <= self.max_hz
+
+
+#: This station is one 2 m yagi. Most active amateur birds are cross-band, so
+#: the default has to be narrow rather than generous: claiming a satellite is
+#: workable when nothing here can hear it is the one failure the map must not
+#: have.
+DEFAULT_BANDS = [BandConfig(min_hz=144_000_000.0, max_hz=148_000_000.0, tx=True, rx=True)]
+
+
+@dataclass
 class StationConfig:
     name: str = "Ground Station"
     latitude: float = 40.4406
     longitude: float = -79.9959
     altitude_m: float = 300.0
+
+    #: Lowest elevation this station can actually work, given trees, terrain
+    #: and local noise — not a link budget. A 6-element yagi on LEO is
+    #: geometry-limited, not gain-limited, so the horizon is what sets range.
+    #:
+    #: A scalar today. Real horizons are not circular (trees west, hill east),
+    #: and the map's range ring is drawn by sampling a great circle, so this
+    #: can later become an `{azimuth: elevation}` profile without a migration.
+    min_workable_elevation_deg: float = 5.0
+
+    #: BandConfig entries, or dicts from YAML.
+    bands: list = field(default_factory=lambda: [BandConfig(**vars(b)) for b in DEFAULT_BANDS])
+
+    def band_list(self) -> list[BandConfig]:
+        """Normalize whatever YAML supplied into BandConfig objects."""
+        out: list[BandConfig] = []
+        for item in self.bands:
+            if isinstance(item, BandConfig):
+                out.append(item)
+            elif isinstance(item, dict):
+                out.append(BandConfig(**item))
+            else:
+                raise ValueError(f"station.bands entries must be mappings, got {item!r}")
+        return out
 
 
 @dataclass
@@ -100,9 +148,30 @@ class AxisConfig:
 
 
 @dataclass
+class SerialSubConfig:
+    """The USB link to the Arduino that emits the pulses.
+
+    Only used by ``backend: serial``. The per-axis pin and endstop-polarity keys
+    are ignored there — those are facts about how the *Arduino* is wired, they
+    live in ``firmware/orbitaly_rotator/pins.h``, and the firmware reports them
+    in its handshake so ``orbitaly doctor`` can print them.
+    """
+
+    #: "auto" scans /dev/serial/by-id (preferred: stable across a replug), then
+    #: /dev/ttyACM*, /dev/ttyUSB*.
+    port: str = "auto"
+    baud: int = 115200
+    #: Opening the port asserts DTR, which resets the board into ~2 s of
+    #: bootloader silence. This covers that before the handshake gives up.
+    connect_timeout_s: float = 5.0
+
+
+@dataclass
 class RotatorConfig:
-    #: auto | lgpio | pio | simulated | kinematic  ("gpio" is a deprecated alias for lgpio)
+    #: auto | serial | lgpio | pio | simulated | kinematic
+    #: ("gpio" is a deprecated alias for lgpio)
     backend: str = "auto"
+    serial: SerialSubConfig = field(default_factory=SerialSubConfig)
     gpiochip: int = -1              # -1 = find the header chip by label
     estop_pin: int = -1             # BCM pin, wired normally-closed to ground
     require_homing: bool | None = None  # None = on for hardware, off for simulation

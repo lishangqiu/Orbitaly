@@ -28,6 +28,17 @@ class Backend(ABC):
     def arm_estop(self, callback: Callable[[], None] | None) -> None:
         pass
 
+    def arm_fault(self, callback: Callable[[str], None] | None) -> None:
+        """Register a callback for faults the *backend* discovers by itself.
+
+        An E-stop is a thing an operator did; this is the link to the hardware
+        failing underneath us — a serial cable pulled out, a board that rebooted
+        mid-pass. Both must stop the antenna, but only this one has a reason
+        worth printing, so it travels with one. Backends wired to hardware that
+        cannot fail this way (lgpio owns its pins for the life of the process)
+        leave it unimplemented.
+        """
+
     def close(self) -> None:
         pass
 
@@ -115,11 +126,12 @@ class LgpioBackend(Backend):
 class PioBackend(Backend):
     """RP1 PIO — hardware-timed pulse trains on a Pi 5.
 
-    Not implemented yet. PIO is the right long-term answer for silent
-    high-microstep drives, but the Python path to it (piolib via ctypes, or
-    Adafruit's Blinka binding) needs a hardware spike before anything depends
-    on it. Until then the selector never picks this backend on its own, and
-    asking for it explicitly fails loudly rather than silently downgrading.
+    A placeholder, not an implementation. The RP1 peripherals datasheet says
+    the southbridge contains PIO blocks, which would be the right long-term
+    answer for silent high-microstep drives — but there is no userspace path
+    to them today, so nothing can be built on it yet. The selector never picks
+    this backend on its own, and asking for it explicitly fails loudly rather
+    than silently downgrading.
     """
 
     name = "pio"
