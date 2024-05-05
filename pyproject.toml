@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orbitaly"
+version = "0.1.0"
+description = "Antenna tracker control software for amateur-radio ground stations: orbital prediction, pass scheduling, and direct stepper-motor az/el rotator control."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "skyfield>=1.49",
+    "sgp4>=2.23",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+gpio = ["RPi.GPIO>=0.7.1"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+orbitaly = "orbitaly.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["orbitaly*"]
+
+[tool.setuptools.package-data]
+orbitaly = ["static/*", "data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

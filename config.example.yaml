@@ -1,0 +1,61 @@
+# Orbitaly configuration — copy to config.yaml and edit.
+# Every key is optional; anything omitted uses the built-in default.
+
+station:
+  name: "Home QTH"
+  latitude: 40.4406        # decimal degrees, north positive
+  longitude: -79.9959      # decimal degrees, east positive
+  altitude_m: 300
+
+tle:
+  sources:
+    - "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle"
+    # Add more URLs (any 2LE/3LE text) and they are merged:
+    # - "https://celestrak.org/NORAD/elements/gp.php?GROUP=cubesat&FORMAT=tle"
+  refresh_hours: 6
+  # cache_path: /var/lib/orbitaly/tle.json
+
+tracker:
+  update_rate_s: 1.0       # how often the rotator is retargeted while tracking
+  min_elevation_deg: 5.0   # passes peaking below this are hidden in the UI
+  pass_lookahead_hours: 24
+  park: {az: 0, el: 90}    # birds-up park position sheds rain and snow
+
+server:
+  host: 0.0.0.0
+  port: 8000
+
+rotator:
+  backend: simulated       # simulated | gpio
+
+  # -- direct stepper drive (backend: gpio, Raspberry Pi BCM pin numbers) --
+  azimuth:
+    min_deg: -90           # extended travel avoids mid-pass 360° slews
+    max_deg: 450
+    max_speed_dps: 6
+    accel_dps2: 4
+    steps_per_rev: 200     # motor full steps per revolution
+    microsteps: 8          # driver microstepping setting
+    gear_ratio: 60         # output degrees = motor degrees / gear_ratio
+    backlash_deg: 0.0
+    invert_dir: false
+    home_position_deg: 0
+    pins: {step: 17, dir: 27, enable: 22, endstop: 5}   # -1 = not wired
+
+  elevation:
+    min_deg: 0
+    max_deg: 180           # 180° allows flipped-over passes
+    max_speed_dps: 4
+    accel_dps2: 4
+    steps_per_rev: 200
+    microsteps: 8
+    gear_ratio: 40
+    backlash_deg: 0.0
+    invert_dir: false
+    home_position_deg: 0
+    pins: {step: 23, dir: 24, enable: 25, endstop: 6}
+
+# Add or override transponder entries per NORAD id:
+# transponder_overrides:
+#   "25544":
+#     - {name: "FM Voice", mode: "FM", uplink_hz: 145990000, downlink_hz: 437800000}

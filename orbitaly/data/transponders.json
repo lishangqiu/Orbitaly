@@ -1,0 +1,50 @@
+{
+  "25544": [
+    {"name": "FM Voice (ARISS)", "mode": "FM", "uplink_hz": 145990000, "downlink_hz": 437800000},
+    {"name": "APRS Digipeater", "mode": "AFSK 1200", "uplink_hz": 145825000, "downlink_hz": 145825000},
+    {"name": "SSTV (event)", "mode": "SSTV", "uplink_hz": null, "downlink_hz": 145800000}
+  ],
+  "27607": [
+    {"name": "SO-50 FM Repeater", "mode": "FM (67.0/74.4 Hz CTCSS)", "uplink_hz": 145850000, "downlink_hz": 436795000}
+  ],
+  "43017": [
+    {"name": "AO-91 FM Repeater", "mode": "FM (67.0 Hz CTCSS)", "uplink_hz": 435250000, "downlink_hz": 145960000}
+  ],
+  "44909": [
+    {"name": "RS-44 Linear", "mode": "SSB/CW inverting", "uplink_hz": 145965000, "downlink_hz": 435640000}
+  ],
+  "43770": [
+    {"name": "FO-99 Linear", "mode": "SSB/CW", "uplink_hz": 145900000, "downlink_hz": 435880000}
+  ],
+  "22825": [
+    {"name": "AO-27 FM Repeater", "mode": "FM", "uplink_hz": 145850000, "downlink_hz": 436795000}
+  ],
+  "39444": [
+    {"name": "AO-73 Linear", "mode": "SSB/CW inverting", "uplink_hz": 435150000, "downlink_hz": 145950000},
+    {"name": "Telemetry", "mode": "BPSK 1200", "uplink_hz": null, "downlink_hz": 145935000}
+  ],
+  "40967": [
+    {"name": "AO-85 FM Repeater", "mode": "FM (67.0 Hz CTCSS)", "uplink_hz": 435170000, "downlink_hz": 145980000}
+  ],
+  "43137": [
+    {"name": "AO-92 FM Repeater", "mode": "FM (67.0 Hz CTCSS)", "uplink_hz": 435350000, "downlink_hz": 145880000}
+  ],
+  "42017": [
+    {"name": "NO-84 PSK31", "mode": "PSK31", "uplink_hz": 28120000, "downlink_hz": 435350000}
+  ],
+  "26931": [
+    {"name": "NO-44 APRS", "mode": "AFSK 1200", "uplink_hz": 145825000, "downlink_hz": 145825000}
+  ],
+  "47311": [
+    {"name": "CAS-3H / LilacSat-2 FM", "mode": "FM", "uplink_hz": 144350000, "downlink_hz": 437200000}
+  ],
+  "53106": [
+    {"name": "GreenCube Digipeater", "mode": "GMSK 1200", "uplink_hz": 435310000, "downlink_hz": 435310000}
+  ],
+  "40908": [
+    {"name": "XW-2A Linear", "mode": "SSB/CW inverting", "uplink_hz": 435030000, "downlink_hz": 145665000}
+  ],
+  "55123": [
+    {"name": "CAS-5A Linear V/U", "mode": "SSB/CW inverting", "uplink_hz": 145820000, "downlink_hz": 435540000}
+  ]
+}
