@@ -151,6 +151,8 @@ REST (JSON):
 - `GET  /api/status` — tracker + rotator + TLE freshness snapshot
 - `POST /api/track/{id}` / `POST /api/track/stop` — engage/disengage
 - `POST /api/rotator/goto {az, el}` / `.../jog` / `.../stop` / `.../park` / `.../home`
+- `GET/POST /api/doppler` — 2 m band working frequencies (144–148 MHz) and
+  live TX/RX corrected values, shift, and drift rate for the tracked satellite
 - `POST /api/tle/refresh` — force TLE re-fetch
 
 WebSocket `/ws`: pushes the `/api/status` snapshot (plus tracked-satellite

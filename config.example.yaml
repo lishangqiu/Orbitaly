@@ -21,6 +21,12 @@ tracker:
   pass_lookahead_hours: 24
   park: {az: 0, el: 90}    # birds-up park position sheds rain and snow
 
+# 2 m band working frequencies for the live doppler readout (144–148 MHz).
+# Changeable at runtime from the dashboard; these are the startup defaults.
+doppler_2m:
+  uplink_hz: 145990000     # TX: what you dial so the satellite hears this frequency
+  downlink_hz: 145800000   # RX: what the satellite transmits; readout shows where to tune
+
 server:
   host: 0.0.0.0
   port: 8000

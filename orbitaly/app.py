@@ -17,6 +17,8 @@ from .hardware.gpio import make_rotator
 
 log = logging.getLogger(__name__)
 
+BAND_2M_HZ = (144_000_000.0, 148_000_000.0)
+
 
 class Services:
     """Everything the API layer needs, in one place."""
@@ -27,6 +29,8 @@ class Services:
         self.predictor = Predictor(config.station)
         self.rotator = make_rotator(config.rotator)
         self.tracker = Tracker(config.tracker, self.predictor, self.tle, self.rotator)
+        self.doppler_2m_uplink_hz = config.doppler_2m.uplink_hz
+        self.doppler_2m_downlink_hz = config.doppler_2m.downlink_hz
 
     def start(self) -> None:
         self.tle.start()
@@ -65,6 +69,58 @@ class Services:
             "transponders": entries,
         }
 
+    # -- 2 m band doppler ---------------------------------------------------
+
+    def set_doppler_2m(self, uplink_hz: float, downlink_hz: float) -> None:
+        lo, hi = BAND_2M_HZ
+        for label, freq in (("uplink", uplink_hz), ("downlink", downlink_hz)):
+            if not lo <= freq <= hi:
+                raise ValueError(
+                    f"{label} {freq/1e6:.4f} MHz is outside the 2 m band "
+                    f"({lo/1e6:.0f}-{hi/1e6:.0f} MHz)"
+                )
+        self.doppler_2m_uplink_hz = uplink_hz
+        self.doppler_2m_downlink_hz = downlink_hz
+
+    def doppler_2m_readout(self, at: float | None = None) -> dict:
+        """Live doppler correction for the configured 2 m working frequencies.
+
+        Applied to the currently tracked satellite. Rate (Hz/s) is derived
+        numerically over a 1 s baseline — it is what an operator (or later,
+        CAT control) needs to keep a signal centered near TCA.
+        """
+        readout = {
+            "band": "2m",
+            "uplink_hz": self.doppler_2m_uplink_hz,
+            "downlink_hz": self.doppler_2m_downlink_hz,
+            "active": False,
+        }
+        norad_id = self.tracker.tracked_norad_id
+        sat = self.tle.get(norad_id) if norad_id is not None else None
+        if sat is None:
+            return readout
+        now = at if at is not None else time.time()
+        obs = self.predictor.observe(sat, now)
+        obs_next = self.predictor.observe(sat, now + 1.0)
+
+        down_shift = obs.doppler_shift_hz(self.doppler_2m_downlink_hz)
+        up_shift = obs.doppler_shift_hz(self.doppler_2m_uplink_hz)
+        readout.update(
+            {
+                "active": True,
+                "norad_id": sat.norad_id,
+                # RX: tune here to hear a downlink transmitted on downlink_hz
+                "downlink_corrected_hz": self.doppler_2m_downlink_hz + down_shift,
+                "downlink_shift_hz": down_shift,
+                "downlink_rate_hz_s": obs_next.doppler_shift_hz(self.doppler_2m_downlink_hz) - down_shift,
+                # TX: transmit here to arrive on uplink_hz at the satellite
+                "uplink_corrected_hz": self.doppler_2m_uplink_hz - up_shift,
+                "uplink_shift_hz": up_shift,
+                "uplink_rate_hz_s": -(obs_next.doppler_shift_hz(self.doppler_2m_uplink_hz) - up_shift),
+            }
+        )
+        return readout
+
     def status_snapshot(self) -> dict:
         rotator_state = self.rotator.state()
         tracked = None
@@ -93,6 +149,7 @@ class Services:
                 "wrap_warning": self.tracker.wrap_warning,
             },
             "tracked": tracked,
+            "doppler_2m": self.doppler_2m_readout(),
             "rotator": {
                 "azimuth": round(rotator_state.azimuth, 2),
                 "elevation": round(rotator_state.elevation, 2),

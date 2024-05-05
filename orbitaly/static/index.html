@@ -4,15 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Orbitaly — Ground Station</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='3' fill='%233987e5'/%3E%3Cellipse cx='8' cy='8' rx='7' ry='2.6' fill='none' stroke='%23898781' stroke-width='1' transform='rotate(-20 8 8)'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header>
-    <div class="brand">🛰 <b>Orbitaly</b> <span id="station-name" class="dim"></span></div>
+    <div class="brand">
+      <span class="mark">ORBITALY</span>
+      <span class="sub">ground station</span>
+      <span id="station-name" class="dim small-text"></span>
+    </div>
     <div class="header-right">
-      <span id="tle-info" class="dim"></span>
+      <span id="tle-info" class="dim small-text"></span>
       <button id="tle-refresh" class="btn small">Refresh TLEs</button>
-      <span id="conn-dot" class="dot offline" title="WebSocket"></span>
+      <span id="conn" class="conn"><span class="dot"></span><span id="conn-label">offline</span></span>
     </div>
   </header>
 
@@ -20,14 +25,19 @@
     <section class="panel" id="sat-panel">
       <div class="panel-title">
         <span>Satellites</span>
-        <input id="sat-search" type="search" placeholder="filter…">
+        <input id="sat-search" type="search" placeholder="Filter">
       </div>
       <div id="sat-list" class="scroll"></div>
     </section>
 
     <section class="panel" id="sky-panel">
-      <div class="panel-title"><span>Sky view</span><span id="tracker-chip" class="chip idle">idle</span></div>
+      <div class="panel-title"><span>Sky view</span><span id="tracker-chip" class="chip">idle</span></div>
       <canvas id="skyplot" width="520" height="520"></canvas>
+      <div class="sky-legend">
+        <span class="key"><span class="key-line"></span>Pass track</span>
+        <span class="key"><span class="key-dot"></span>Satellite</span>
+        <span class="key"><span class="key-cross">+</span>Antenna</span>
+      </div>
       <div id="tracked-info"></div>
       <div id="passes-box">
         <div class="panel-title"><span id="passes-title">Upcoming passes</span></div>
@@ -36,27 +46,27 @@
     </section>
 
     <section class="panel" id="ctl-panel">
-      <div class="panel-title"><span>Rotator</span><span id="rot-moving" class="chip idle">stopped</span></div>
+      <div class="panel-title"><span>Rotator</span><span id="rot-moving" class="chip">stopped</span></div>
       <div class="readouts">
         <div class="readout"><label>Azimuth</label><div id="rd-az" class="big">—</div><div id="rd-az-t" class="dim small-text"></div></div>
         <div class="readout"><label>Elevation</label><div id="rd-el" class="big">—</div><div id="rd-el-t" class="dim small-text"></div></div>
       </div>
       <div id="rot-fault" class="fault"></div>
-      <div id="wrap-warning" class="fault"></div>
+      <div id="wrap-warning" class="warn-text"></div>
 
       <div class="jog-grid">
-        <span></span><button class="btn jog" data-daz="0" data-del="5">El +5°</button><span></span>
-        <button class="btn jog" data-daz="-5" data-del="0">Az −5°</button>
-        <button class="btn jog" data-daz="0" data-del="0.5">+0.5°</button>
-        <button class="btn jog" data-daz="5" data-del="0">Az +5°</button>
-        <button class="btn jog" data-daz="-0.5" data-del="0">−0.5°</button>
-        <button class="btn jog" data-daz="0" data-del="-5">El −5°</button>
-        <button class="btn jog" data-daz="0.5" data-del="0">+0.5°</button>
+        <span></span><button class="btn jog" data-daz="0" data-del="5">El +5</button><span></span>
+        <button class="btn jog" data-daz="-5" data-del="0">Az −5</button>
+        <button class="btn jog" data-daz="0" data-del="0.5">El +0.5</button>
+        <button class="btn jog" data-daz="5" data-del="0">Az +5</button>
+        <button class="btn jog" data-daz="-0.5" data-del="0">Az −0.5</button>
+        <button class="btn jog" data-daz="0" data-del="-5">El −5</button>
+        <button class="btn jog" data-daz="0.5" data-del="0">Az +0.5</button>
       </div>
 
       <form id="goto-form" class="goto-row">
-        <input id="goto-az" type="number" step="0.1" placeholder="az°" required>
-        <input id="goto-el" type="number" step="0.1" placeholder="el°" required>
+        <input id="goto-az" type="number" step="0.1" placeholder="Az °" required>
+        <input id="goto-el" type="number" step="0.1" placeholder="El °" required>
         <button class="btn" type="submit">Goto</button>
       </form>
 
@@ -67,7 +77,20 @@
         <button id="btn-untrack" class="btn">Stop tracking</button>
       </div>
 
-      <div id="doppler-box"></div>
+      <div class="doppler-section">
+        <div class="panel-title"><span>2 m doppler</span><span id="doppler-state" class="chip">idle</span></div>
+        <form id="doppler-form">
+          <div class="freq-row"><span class="dir">TX</span><input id="dop-up" type="number" step="0.001" min="144" max="148" required> <span class="dim small-text">MHz</span></div>
+          <div class="freq-row"><span class="dir">RX</span><input id="dop-down" type="number" step="0.001" min="144" max="148" required> <span class="dim small-text">MHz</span></div>
+          <button class="btn small" type="submit">Set frequencies</button>
+        </form>
+        <table class="freq-table" id="doppler-table"></table>
+      </div>
+
+      <div class="doppler-section" id="xpndr-section" hidden>
+        <div class="panel-title"><span>Transponders</span></div>
+        <div id="doppler-box"></div>
+      </div>
     </section>
   </main>
 

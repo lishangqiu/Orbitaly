@@ -23,6 +23,11 @@ class JogRequest(BaseModel):
     d_el: float = 0.0
 
 
+class Doppler2mRequest(BaseModel):
+    uplink_hz: float
+    downlink_hz: float
+
+
 @router.get("/satellites")
 def list_satellites(request: Request):
     services = get_services(request)
@@ -121,6 +126,21 @@ def rotator_park(request: Request):
 def rotator_home(request: Request):
     get_services(request).rotator.home()
     return {"ok": True}
+
+
+@router.get("/doppler")
+def doppler_2m(request: Request):
+    return get_services(request).doppler_2m_readout()
+
+
+@router.post("/doppler")
+def set_doppler_2m(body: Doppler2mRequest, request: Request):
+    services = get_services(request)
+    try:
+        services.set_doppler_2m(body.uplink_hz, body.downlink_hz)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return services.doppler_2m_readout()
 
 
 @router.post("/tle/refresh")

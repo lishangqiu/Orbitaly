@@ -94,6 +94,14 @@ class RotatorConfig:
 
 
 @dataclass
+class Doppler2mConfig:
+    """Working frequencies for the 2 m band doppler readout (Hz)."""
+
+    uplink_hz: float = 145_990_000.0    # ARISS voice uplink as a sensible default
+    downlink_hz: float = 145_800_000.0  # ISS voice downlink
+
+
+@dataclass
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8000
@@ -105,6 +113,7 @@ class Config:
     tle: TleConfig = field(default_factory=TleConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
     rotator: RotatorConfig = field(default_factory=RotatorConfig)
+    doppler_2m: Doppler2mConfig = field(default_factory=Doppler2mConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     transponder_overrides: dict[str, Any] = field(default_factory=dict)
 

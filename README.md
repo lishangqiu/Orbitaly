@@ -21,6 +21,9 @@ See [PLAN.md](PLAN.md) for the full architecture and design document.
   rotator travel (e.g. −90°…450°) so the antenna never does a 360° slew
   mid-pass
 - **Doppler**: corrected uplink/downlink frequencies per transponder, live
+- **2 m band doppler panel**: set any working uplink/downlink pair in
+  144–148 MHz and get live TX/RX corrected frequencies, shift, and drift
+  rate (Hz/s) for the tracked satellite — the numbers you dial into the rig
 - **Direct stepper integration**: trapezoidal ramps, endstop homing, gear
   ratios, microstepping, backlash compensation — driven straight from
   Raspberry Pi GPIO (A4988 / DRV8825 / TMC step-dir drivers)
