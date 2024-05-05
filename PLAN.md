@@ -72,14 +72,20 @@ browsers over WebSocket about once per second.
 | Frontend           | Vanilla JS + canvas   | No build step; single static page; works on a Pi       |
 | TLE source         | Celestrak (amateur group), pluggable | Canonical source for ham satellite TLEs |
 | Config             | YAML                  | Human-editable station/hardware description            |
-| GPIO               | RPi.GPIO / pigpio (optional extra) | Direct step-pulse generation on a Pi      |
+| GPIO               | lgpio (optional extra)| Kernel gpiochip access; the only supported path on a Pi 5 |
+| Rig control        | hamlib `rigctld` over TCP | ~250 radios for free, nothing to implement per model |
 
-Python software-timed stepping is jittery above a few hundred Hz; the plan is:
-`RPi.GPIO` software pulses are fine for typical az/el tracking rates (a
-rotator slews a few °/s through high gear reduction → modest step rates), and
-a `pigpio` waveform backend is the documented upgrade path for high
-microstepping rates. The `StepperAxis` pulse generator is pluggable so both
-fit behind the same interface — and so tests can run with a fake clock.
+**Pulse generation (revised — see §9 M4).** Python never times individual
+steps. The planner emits *segments* — `(direction, step count, period)` — and
+a backend hands each to hardware that emits exactly that many pulses, so
+Python runs at tens of hertz feeding segments instead of thousands of hertz
+toggling a pin. `lgpio.tx_pulse` provides exact cycle counts from a C thread
+and works on every Pi including the 5; RP1 PIO fits the same interface for
+hardware-exact timing later.
+
+The property this buys: **step counts are exact, timing is approximate.**
+Position is derived from pulses hardware reports as executed, never from
+elapsed time, so jitter costs smoothness and never accuracy.
 
 ## 5. Module design
 
@@ -131,17 +137,37 @@ States: `IDLE → ACQUIRING → TRACKING → (IDLE | PARKED)`, plus `MANUAL`.
 - `base.Rotator` (ABC): `goto(az, el)`, `jog(daz, del_)`, `stop()`,
   `home()`, `park(az, el)`, `state -> RotatorState` (commanded + actual
   position, moving flags, homed flags, fault string).
-- `simulated.SimulatedRotator`: kinematic model honoring max speed/accel —
-  the default backend; the whole app is developable with no hardware.
-- `stepper.StepperAxis`: one motor axis, all in software:
-  - degrees ↔ steps via `steps_per_rev × microsteps × gear_ratio`
-  - trapezoidal velocity profile (accel-limited ramps)
-  - soft travel limits, homing to a limit/hall switch, backlash takeup
-  - runs in its own thread; pulses go through a pluggable `PulseDriver`
-    (real GPIO or a test double).
-- `gpio.GpioRotator`: two `StepperAxis` (az, el) on step/dir/enable pins,
-  optional endstop inputs. Imports `RPi.GPIO` lazily so the codebase runs
-  anywhere.
+- `simulated.SimulatedRotator`: the original continuous kinematic model, kept
+  as `backend: kinematic` for pure-UI demos. It does not exercise the planner,
+  so it is no longer the default.
+
+Motion itself now lives in `orbitaly.motion` (§5.5b); `hardware.gpio` is a
+compatibility shim so `backend: gpio` in an old config still starts.
+
+### 5.5b `orbitaly.motion` — planning, backends, supervision
+- `segment.Segment` / `AxisKinematics`: the unit of work and the limits.
+- `planner`: pure functions, no clock. Trapezoidal profiles in step space that
+  always end at rest, replan from a moving start, and emit ramps as a
+  staircase whose stair height is bounded by what a motor can swallow.
+- `driver.AxisDriver` / `BufferedAxisDriver`: segment-level electrical
+  interface, plus the bookkeeping that keeps ~60 ms queued in hardware and
+  serialises every direction change.
+- `lgpio_driver`, `sim_driver`, `pio_driver`: the backends.
+- `axis.StepperAxis`: supervisor — replans on retarget, homes (fast seek, back
+  off, slow approach), and owns the interlocks. Retargeting never aborts
+  in-flight pulses; it replans from the end of what hardware already has,
+  which is why tracking can retarget every second without drifting.
+- `rotator.StepperRotator`: two axes as a `Rotator`, plus E-stop and the
+  heartbeat watchdog.
+- `detect`: probes the machine and picks a backend, reportably.
+
+### 5.5c `orbitaly.radio`, `orbitaly.net`, `orbitaly.core.scheduler`
+- `radio`: `Rig` ABC, a rigctld TCP client using the extended-response
+  protocol, a simulated rig, and `DopplerTuner` (full-duplex TX/RX correction,
+  per-mode deadbands, CAT rate limiting, PTT awareness).
+- `net.rotctld_server`: hamlib rotator protocol on TCP 4533.
+- `core.scheduler`: watch list → conflict-resolved pass plan → tracker
+  handover, yielding immediately to manual control.
 
 ### 5.6 `orbitaly.api` + `orbitaly.app` — web layer
 REST (JSON):
@@ -151,8 +177,12 @@ REST (JSON):
 - `GET  /api/status` — tracker + rotator + TLE freshness snapshot
 - `POST /api/track/{id}` / `POST /api/track/stop` — engage/disengage
 - `POST /api/rotator/goto {az, el}` / `.../jog` / `.../stop` / `.../park` / `.../home`
+- `POST /api/rotator/estop` / `.../fault/clear` — emergency stop and reset.
+  Motion refused by an interlock answers **409** with the reason.
 - `GET/POST /api/doppler` — 2 m band working frequencies (144–148 MHz) and
   live TX/RX corrected values, shift, and drift rate for the tracked satellite
+- `GET/POST /api/rig` — rig tuning state and working frequencies (any band)
+- `GET /api/schedule`, `POST /api/schedule/{enable,disable}` — unattended passes
 - `POST /api/tle/refresh` — force TLE re-fetch
 
 WebSocket `/ws`: pushes the `/api/status` snapshot (plus tracked-satellite
@@ -175,21 +205,33 @@ Single page, three columns, dark theme:
 Orbitaly/
 ├── PLAN.md                  ← this document
 ├── README.md
-├── pyproject.toml           # deps; optional extra: [gpio]
+├── pyproject.toml           # deps; optional extras: [pi] (lgpio), [dev]
 ├── config.example.yaml
+├── deploy/                  # systemd unit + install-pi.sh
+├── docs/HARDWARE.md         # wiring, interlocks, commissioning order
 ├── orbitaly/
-│   ├── __main__.py          # python -m orbitaly [--config path]
+│   ├── __main__.py          # serve | doctor | selftest
 │   ├── config.py
 │   ├── app.py               # FastAPI wiring + lifespan (threads up/down)
 │   ├── api/{rest,ws}.py
-│   ├── core/{tle,predictor,tracker}.py
+│   ├── cli/{doctor,selftest}.py
+│   ├── core/{tle,predictor,tracker,scheduler}.py
 │   ├── data/transponders.json
-│   ├── hardware/{base,simulated,stepper,gpio}.py
+│   ├── hardware/{base,simulated,gpio}.py   # gpio.py is a compat shim
+│   ├── motion/              # segment planning, backends, supervision
+│   ├── net/rotctld_server.py
+│   ├── radio/{base,rigctld,simulated,tuner}.py
 │   └── static/{index.html,app.js,style.css}
 └── tests/
+    ├── fakes/               # fake lgpio, virtual rotator, fake rigctld, clock
     ├── test_predictor.py    # known-TLE sanity: ISS az/el ranges, pass ordering
     ├── test_tracker.py      # unwrap logic, state transitions
-    └── test_stepper.py      # deg↔steps, ramp profile, limits, homing (fake driver)
+    ├── test_planner.py      # exact counts, ramp shape, stopping distance
+    ├── test_axis.py         # supervisor + interlocks against a virtual mechanism
+    ├── test_lgpio_driver.py # the real Pi code path, contract-enforcing fake
+    ├── test_pi_simulation.py# whole passes end to end
+    ├── test_gpiosim.py      # opt-in: real kernel gpiochips
+    └── test_{rig,rotctld,scheduler,cli}.py
 ```
 
 ## 7. Key algorithms (detail)
@@ -201,14 +243,24 @@ fits inside `[az_min, az_max]` (rotator travel). If none fits (rotator with
 exactly 360°), fall back to raw azimuth and accept one mid-pass wrap slew —
 and surface a UI warning.
 
-**Trapezoidal profile.** Per axis-thread iteration: current velocity `v`,
-target position `x_t`. Decel distance `d = v²/2a`. If `|x_t − x| ≤ d`,
-decelerate, else accelerate toward `v_max` (sign toward target). Step period
-`1/(v·steps_per_deg)`. Retargeting mid-move is safe because the loop only
-ever reasons about *current* state → new target.
+**Trapezoidal profile (segment form).** A move is planned whole, in step
+space, and always ends at rest: accelerate from the current rate, cruise at
+`v_max`, decelerate to the pull-in rate. Each step is assigned the *lower* of
+the ideal ramp velocities at its two ends, so the staircase sits under the
+ideal curve and the acceleration limit is approached but never exceeded — and
+the first step of an acceleration, and the last of a deceleration, land at the
+pull-in rate, which is what makes starting and stopping clean. Consecutive
+steps are merged while they stay within `max_jump_sps`, turning a 27,000-step
+slew into a few hundred segments.
 
-**Backlash.** Track last motion direction per axis; on reversal add the
-configured backlash steps before counting real travel.
+Because every plan terminates at rest, stopping is always safe: let the queue
+drain. And because a retarget replans from the *committed* end of the queue
+rather than aborting, no in-flight pulses are ever discarded — the reason 1 Hz
+tracking updates accumulate no error.
+
+**Backlash.** Track last motion direction per axis; on reversal emit the
+configured backlash steps as a non-counting segment — pulses that turn the
+motor and wind up the slack without changing logical position.
 
 **Doppler.** Skyfield gives range-rate directly from the topocentric
 position/velocity; `Δf = −f·ṙ/c`. Downlink: observed = f·(1 − ṙ/c).
@@ -234,20 +286,34 @@ rotator:
 
 ## 9. Milestones
 
-1. **M1 — Core math** ✅ (this commit): TLE manager, predictor, passes, doppler + tests
+1. **M1 — Core math** ✅: TLE manager, predictor, passes, doppler + tests
 2. **M2 — Motion** ✅: StepperAxis, simulated + GPIO rotators, tracker w/ unwrap + tests
 3. **M3 — Web** ✅: REST/WS API, dashboard UI
-4. **M4 — Field hardening** (next): pigpio pulse backend, homing UX, calibration
-   wizard, systemd unit, install docs on real hardware
-5. **M5 — Radio** (roadmap): hamlib CAT doppler tuning, rotctld-compatible server
-   so legacy tools can *also* drive Orbitaly
+4. **M4 — Field hardening** ✅: segment-based motion (`orbitaly.motion`), lgpio
+   backend for the Pi 5, safety interlocks, Pi-behaviour simulation harness,
+   `orbitaly doctor` / `selftest --loopback`, systemd unit, install docs
+5. **M5 — Radio** ✅: rigctld CAT doppler tuning, rotctld-compatible server,
+   pass scheduler
+
+### M4 note: the pulse backend changed
+
+M4 originally planned a pigpio waveform backend. **pigpio cannot run on a
+Raspberry Pi 5** — the RP1 southbridge moved the GPIO block out from under
+every register-poking library, RPi.GPIO included — so the target hardware
+ruled out both the old backend and its planned replacement.
+
+What shipped instead: the planner emits `(direction, steps, period)` segments
+and a backend hands each to hardware that emits exactly that many pulses.
+`lgpio.tx_pulse` does this in a C thread with exact cycle counts, which keeps
+Python out of the timing loop and makes step counts — and therefore position —
+exact regardless of jitter. RP1 PIO fits the same interface and remains the
+quality tier; it needs a hardware spike before anything depends on it.
 
 ## 10. Roadmap beyond v1
 
-- Rig control: hamlib bindings, per-transponder doppler tuning of a real radio
-- rotctld protocol emulation (Orbitaly as a drop-in gpredict rotor backend)
-- Pass scheduler: queue passes across satellites, auto-track the best pass
+- RP1 PIO backend: hardware-exact pulse timing for silent high-microstep drives
 - SatNOGS DB sync for transponders; observation upload
 - Sky plot polish: sun/moon, multi-satellite view, ground-track world map
-- pigpio/PIO waveform stepping for silent high-microstep drives
+- Per-transponder rig tuning driven from the transponder list
+- Calibration wizard: measure backlash and gear ratio from the UI
 ```

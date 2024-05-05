@@ -13,6 +13,7 @@ class RotatorState:
     target_elevation: float
     moving: bool
     homed: bool
+    homing: bool = False
     fault: str = ""
 
 
@@ -45,6 +46,24 @@ class Rotator(ABC):
 
     def close(self) -> None:  # optional cleanup
         pass
+
+    def heartbeat(self) -> None:
+        """Called every cycle by whatever is actively steering the antenna.
+
+        Backends with a watchdog use this to notice that the thing driving
+        them has died mid-pass and stop rather than sit on a stale target.
+        """
+
+    def release(self) -> None:
+        """Steering has stopped deliberately — disarm any watchdog."""
+
+    def emergency_stop(self, reason: str = "emergency stop") -> None:
+        """Cut motion immediately. Defaults to a controlled stop."""
+        self.stop()
+
+    def clear_fault(self) -> bool:
+        """Clear a latched fault if its cause is gone. True if now clear."""
+        return True
 
     @property
     @abstractmethod

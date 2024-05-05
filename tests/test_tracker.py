@@ -1,14 +1,26 @@
 """Azimuth unwrap logic and tracker state transitions."""
 from orbitaly.config import TrackerConfig
 from orbitaly.core.tracker import Tracker, TrackerState, choose_az_offset, unwrap_azimuths
+from orbitaly.hardware.base import Rotator
 
 
-class FakeRotator:
-    """Records commands; reports a 450-degree azimuth rotator."""
+class FakeRotator(Rotator):
+    """Records commands; reports a 450-degree azimuth rotator.
+
+    Subclasses the real ABC so it inherits the heartbeat/release contract
+    instead of drifting away from it.
+    """
 
     def __init__(self, az_travel=(-90.0, 450.0)):
         self.commands = []
         self._az_travel = az_travel
+        self.heartbeats = 0
+
+    def heartbeat(self):
+        self.heartbeats += 1
+
+    def release(self):
+        self.commands.append(("release",))
 
     def goto(self, az, el):
         self.commands.append(("goto", az, el))

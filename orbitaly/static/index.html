@@ -40,7 +40,13 @@
       </div>
       <div id="tracked-info"></div>
       <div id="passes-box">
-        <div class="panel-title"><span id="passes-title">Upcoming passes</span></div>
+        <div class="panel-title">
+          <span id="passes-title">Upcoming passes</span>
+          <span class="sched-controls">
+            <span id="sched-next" class="dim small-text"></span>
+            <button id="btn-sched" class="btn small" hidden>Auto-track</button>
+          </span>
+        </div>
         <div id="pass-list" class="scroll"></div>
       </div>
     </section>
@@ -50,6 +56,10 @@
       <div class="readouts">
         <div class="readout"><label>Azimuth</label><div id="rd-az" class="big">—</div><div id="rd-az-t" class="dim small-text"></div></div>
         <div class="readout"><label>Elevation</label><div id="rd-el" class="big">—</div><div id="rd-el-t" class="dim small-text"></div></div>
+      </div>
+      <div id="rot-status" class="status-banner" hidden>
+        <span id="rot-status-text"></span>
+        <button id="btn-clear-fault" class="btn small" hidden>Clear fault</button>
       </div>
       <div id="rot-fault" class="fault"></div>
       <div id="wrap-warning" class="warn-text"></div>
@@ -72,6 +82,7 @@
 
       <div class="button-row">
         <button id="btn-stop" class="btn danger">Stop</button>
+        <button id="btn-estop" class="btn estop" title="Cut motion immediately. Requires re-homing afterwards.">E-STOP</button>
         <button id="btn-park" class="btn">Park</button>
         <button id="btn-home" class="btn">Home</button>
         <button id="btn-untrack" class="btn">Stop tracking</button>
@@ -85,6 +96,15 @@
           <button class="btn small" type="submit">Set frequencies</button>
         </form>
         <table class="freq-table" id="doppler-table"></table>
+      </div>
+
+      <div class="doppler-section" id="rig-section" hidden>
+        <div class="panel-title"><span>Radio</span><span id="rig-state" class="chip">off</span></div>
+        <div id="rig-error" class="fault"></div>
+        <table class="freq-table" id="rig-table"></table>
+        <div class="button-row">
+          <button id="btn-rig-toggle" class="btn small">Enable tuning</button>
+        </div>
       </div>
 
       <div class="doppler-section" id="xpndr-section" hidden>

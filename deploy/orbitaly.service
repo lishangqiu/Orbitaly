@@ -1,0 +1,33 @@
+[Unit]
+Description=Orbitaly antenna tracker ground station
+Documentation=https://github.com/lishangqiu/Orbitaly
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orbitaly
+Group=orbitaly
+# GPIO character devices are group-owned by "gpio" on Raspberry Pi OS.
+SupplementaryGroups=gpio
+WorkingDirectory=/opt/orbitaly
+ExecStart=/opt/orbitaly/.venv/bin/orbitaly serve --config /etc/orbitaly/config.yaml
+Restart=on-failure
+RestartSec=5
+
+# Needed only if rotator.realtime_priority is set: lets the axis threads ask
+# for SCHED_FIFO. Without it Orbitaly runs fine, just on the normal scheduler.
+AmbientCapabilities=CAP_SYS_NICE
+
+# The antenna keeps moving while this restarts, so give shutdown enough time
+# to stop the axes and drop the driver enable lines.
+TimeoutStopSec=20
+KillSignal=SIGINT
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

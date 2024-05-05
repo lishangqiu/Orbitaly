@@ -30,11 +30,58 @@ doppler_2m:
 server:
   host: 0.0.0.0
   port: 8000
+  # Speak hamlib's rotator protocol so gpredict and friends can drive Orbitaly.
+  rotctld:
+    enabled: false
+    host: 0.0.0.0
+    port: 4533
+
+# Radio control for automatic doppler tuning, via hamlib's rigctld.
+# Start the daemon separately, e.g.:  rigctld -m 3081 -r /dev/ttyUSB0
+rig:
+  backend: none            # none | rigctld | simulated
+  host: 127.0.0.1
+  port: 4532
+  tx_vfo: VFOB             # satellite full duplex: RX on the main VFO, TX on this one
+  uplink_hz: 0             # 0 = follow the 2 m panel above
+  downlink_hz: 0
+  enabled: true            # tune as soon as a satellite is tracked
+  tune_rx: true
+  tune_tx: true
+  tune_while_tx: true      # set false if your rig clicks when retuned mid-transmission
+  max_tune_rate_hz: 2      # cap on CAT writes per second
+  resolution_hz: 1
+  min_elevation_deg: -1
+  # How far the corrected frequency may drift before retuning, by mode.
+  deadbands_hz: {CW: 10, USB: 20, LSB: 20, FM: 200, default: 20}
+
+# Unattended operation: work the best pass, then the next one.
+scheduler:
+  enabled: false
+  satellites: []
+    # - {norad_id: 25544, priority: 2}          # ISS first, whatever else is up
+    # - {norad_id: 43017, min_elevation_deg: 20}  # FOX-1D, but only good passes
+  lookahead_hours: 12
+  replan_interval_s: 600
+  preposition_lead_s: 120  # engage tracking this long before AOS
+  park_after_idle_s: 0     # 0 = stay put between passes
 
 rotator:
-  backend: simulated       # simulated | gpio
+  # auto     pick the best backend for this machine (lgpio on a Pi, else simulated)
+  # lgpio    Raspberry Pi via the kernel gpiochip device — the only supported
+  #          hardware path on a Pi 5, since RPi.GPIO and pigpio cannot run there
+  # pio      RP1 PIO, hardware-timed (not implemented yet — see docs/HARDWARE.md)
+  # simulated  no hardware, but the full planner and safety logic
+  backend: auto
+  gpiochip: -1             # -1 = find the header chip by label (it renumbers between kernels)
 
-  # -- direct stepper drive (backend: gpio, Raspberry Pi BCM pin numbers) --
+  # -- safety -------------------------------------------------------------
+  estop_pin: -1            # BCM pin, wired normally-closed to ground; -1 = none
+  require_homing: null     # null = required on hardware, not in simulation
+  idle_disable_s: 0        # release motor current after this long at rest (0 = hold)
+  watchdog_s: 5            # stop if whatever is steering stops heartbeating
+
+  # -- direct stepper drive (Raspberry Pi BCM pin numbers) ----------------
   azimuth:
     min_deg: -90           # extended travel avoids mid-pass 360° slews
     max_deg: 450
@@ -47,6 +94,15 @@ rotator:
     invert_dir: false
     home_position_deg: 0
     pins: {step: 17, dir: 27, enable: 22, endstop: 5}   # -1 = not wired
+    # Pulse shaping — from the driver datasheet. Defaults suit A4988/DRV8825/TMC2209.
+    start_speed_sps: 8          # crawl rate the axis can start and stop at instantly
+    pulse_width_us: 5           # step pulse high time
+    dir_setup_us: 20            # settle time after a direction change
+    enable_active_low: true
+    segment_ms: 20              # motion handed to hardware per segment
+    endstop_normally_closed: true   # NC fails safe: a cut wire reads as a trip
+    endstop_debounce_ms: 5
+    home_backoff_deg: 1.0       # back off and re-approach slowly, for repeatability
 
   elevation:
     min_deg: 0

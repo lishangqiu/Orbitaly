@@ -19,7 +19,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gpio = ["RPi.GPIO>=0.7.1"]
+# Raspberry Pi GPIO. lgpio talks to the kernel gpiochip character device, which
+# is the only supported path on a Pi 5 (RPi.GPIO and pigpio cannot work there).
+pi = ["lgpio>=0.2.2.0"]
+pi5 = ["lgpio>=0.2.2.0"]
+gpio = ["lgpio>=0.2.2.0"]  # deprecated alias, kept so old install docs still work
 dev = ["pytest>=8.0"]
 
 [project.scripts]
@@ -33,3 +37,7 @@ orbitaly = ["static/*", "data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "gpiosim: needs the kernel's gpio-sim module (real gpiochips in software)",
+    "hardware: needs a real Raspberry Pi with the rotator wired up",
+]

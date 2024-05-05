@@ -33,13 +33,25 @@ const fmtCountdown = (unix) => {
   return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : m > 0 ? `${m}m ${String(s).padStart(2, "0")}s` : `${s}s`;
 };
 
+let apiError = "";
+let apiErrorAt = 0;
+
 async function post(url, body) {
   const res = await fetch(url, {
     method: "POST",
     headers: body ? { "Content-Type": "application/json" } : {},
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) console.warn("POST failed", url, await res.text());
+  if (!res.ok) {
+    // An interlock refusal (409) is the interesting case: the operator asked
+    // for motion and did not get it, so the reason has to reach the screen.
+    let detail = await res.text();
+    try { detail = JSON.parse(detail).detail ?? detail; } catch { /* plain text */ }
+    apiError = detail;
+    apiErrorAt = Date.now();
+    console.warn("POST failed", url, detail);
+    if (state) render();
+  }
   return res;
 }
 
@@ -227,6 +239,37 @@ function drawSky() {
 
 /* ---------- render loop ---------- */
 
+/* The rotator will refuse to move until it knows where it is, so say so
+   plainly rather than letting Track look broken. */
+function renderRotatorStatus(rot, tracker) {
+  const banner = $("rot-status");
+  const text = $("rot-status-text");
+  const clear = $("btn-clear-fault");
+  let message = "";
+  let level = "info";
+
+  if (apiError && Date.now() - apiErrorAt < 6000) {
+    message = apiError;
+    level = "error";
+  } else if (rot.fault) {
+    message = rot.fault;
+    level = "error";
+  } else if (rot.homing) {
+    message = "Homing — finding the endstop";
+  } else if (!rot.homed) {
+    message = "Not homed. Press Home before tracking.";
+    level = "warn";
+  } else if (tracker.blocked) {
+    message = tracker.blocked;
+    level = "warn";
+  }
+
+  banner.hidden = !message;
+  banner.className = "status-banner " + level;
+  text.textContent = message;
+  clear.hidden = !rot.fault;
+}
+
 function render() {
   if (!state) return;
   $("station-name").textContent = state.station.name;
@@ -244,6 +287,9 @@ function render() {
   $("rot-moving").className = "chip" + (rot.moving ? " moving" : "");
   $("rot-fault").textContent = rot.fault ? `Fault: ${rot.fault}` : "";
   $("wrap-warning").textContent = state.tracker.wrap_warning || "";
+  renderRotatorStatus(rot, state.tracker);
+  renderRig(state.rig);
+  renderSchedule(state.schedule);
 
   const tleAge = state.tle.fetched_at ? Math.round((state.time - state.tle.fetched_at) / 3600) : null;
   $("tle-info").textContent = `${state.tle.satellite_count} satellites · TLEs ${tleAge == null ? "not loaded" : tleAge + " h old"}`;
@@ -293,6 +339,64 @@ function renderDoppler2m(d) {
     row("RX", d.downlink_corrected_hz, d.downlink_shift_hz, d.downlink_rate_hz_s);
 }
 
+/* ---------- scheduler ---------- */
+
+function renderSchedule(schedule) {
+  const button = $("btn-sched");
+  const label = $("sched-next");
+  if (!schedule || !schedule.watching) {
+    // Nothing on the watch list, so the control would do nothing. Hide it.
+    button.hidden = true;
+    label.textContent = "";
+    return;
+  }
+  button.hidden = false;
+  button.textContent = schedule.enabled ? "Auto-track: on" : "Auto-track: off";
+  button.className = "btn small" + (schedule.enabled ? " active" : "");
+
+  if (schedule.engaged) {
+    label.textContent = `working ${schedule.engaged.name}`;
+  } else if (schedule.upcoming && schedule.upcoming.length) {
+    const next = schedule.upcoming[0];
+    label.textContent = `next ${next.name} in ${fmtCountdown(next.aos)} · ${next.max_elevation}°`;
+  } else {
+    label.textContent = schedule.enabled ? "no passes planned" : "";
+  }
+}
+
+/* ---------- radio panel ---------- */
+
+function renderRig(rig) {
+  const section = $("rig-section");
+  if (!rig || !rig.present) { section.hidden = true; return; }
+  section.hidden = false;
+
+  const chip = $("rig-state");
+  const live = rig.connected && rig.enabled;
+  chip.textContent = !rig.enabled ? "off" : rig.connected ? "tuning" : "no radio";
+  chip.className = "chip" + (live ? " tracking" : rig.enabled ? " acquiring" : "");
+  $("rig-error").textContent = rig.error || "";
+  $("btn-rig-toggle").textContent = rig.enabled ? "Disable tuning" : "Enable tuning";
+
+  const table = $("rig-table");
+  if (rig.target_rx_hz == null) {
+    table.innerHTML = `<tr><td colspan="3">Idle — waiting for a tracked satellite.</td></tr>`;
+    return;
+  }
+  // Target is what doppler says; rig is where the radio actually sits. The gap
+  // between them is the deadband doing its job, not an error.
+  const row = (label, target, actual) => `
+    <tr>
+      <td>${label}</td>
+      <td class="val">${fmtMHz(target)}</td>
+      <td class="aux">rig ${actual == null ? "—" : fmtMHz(actual)}</td>
+    </tr>`;
+  table.innerHTML =
+    row("TX", rig.target_tx_hz, rig.rig_tx_hz) +
+    row("RX", rig.target_rx_hz, rig.rig_rx_hz) +
+    `<tr><td>${rig.mode || "—"}</td><td class="aux" colspan="2">deadband ${rig.deadband_hz} Hz · ${rig.tunes} retunes</td></tr>`;
+}
+
 /* ---------- transponder panel ---------- */
 
 function renderTransponders(obs) {
@@ -331,6 +435,15 @@ $("goto-form").onsubmit = (e) => {
   post("/api/rotator/goto", { az: parseFloat($("goto-az").value), el: parseFloat($("goto-el").value) });
 };
 $("btn-stop").onclick = () => post("/api/rotator/stop");
+$("btn-estop").onclick = () => {
+  if (confirm("Cut motion immediately?\n\nThe axes lose their position reference and must be re-homed.")) {
+    post("/api/rotator/estop");
+  }
+};
+$("btn-clear-fault").onclick = () => post("/api/rotator/fault/clear");
+$("btn-rig-toggle").onclick = () => post("/api/rig", { enabled: !(state && state.rig && state.rig.enabled) });
+$("btn-sched").onclick = () =>
+  post(`/api/schedule/${state && state.schedule && state.schedule.enabled ? "disable" : "enable"}`);
 $("btn-park").onclick = () => post("/api/rotator/park");
 $("btn-home").onclick = () => post("/api/rotator/home");
 $("btn-untrack").onclick = () => post("/api/track/stop");

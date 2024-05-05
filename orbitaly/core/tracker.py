@@ -19,6 +19,7 @@ from enum import Enum
 
 from ..config import TrackerConfig
 from ..hardware.base import Rotator
+from ..motion.errors import MotionBlocked
 from .predictor import Pass, Predictor
 from .tle import TleManager
 
@@ -42,6 +43,24 @@ def unwrap_azimuths(azimuths: list[float]) -> list[float]:
         delta = (az - prev + 180.0) % 360.0 - 180.0
         result.append(prev + delta)
     return result
+
+
+def map_into_travel(azimuth: float, current: float, az_min: float, az_max: float) -> float:
+    """Pick the representation of a sky azimuth that is nearest where we are.
+
+    An extended-travel rotator can point at 10 degrees as 10, 370 or -350. Any
+    of them is correct; the one to command is whichever is inside the travel
+    limits and closest to the current position, so an external client sending
+    plain 0..360 azimuths never provokes a needless full-circle slew.
+    """
+    candidates = [
+        azimuth + 360.0 * k
+        for k in (-2, -1, 0, 1, 2)
+        if az_min - 1e-9 <= azimuth + 360.0 * k <= az_max + 1e-9
+    ]
+    if not candidates:
+        return min(max(azimuth, az_min), az_max)
+    return min(candidates, key=lambda c: abs(c - current))
 
 
 def choose_az_offset(lo: float, hi: float, az_min: float, az_max: float) -> float | None:
@@ -75,6 +94,7 @@ class Tracker:
         self._az_offset = 0.0
         self._prev_continuous_az: float | None = None
         self._wrap_warning = ""
+        self._blocked = ""
         self._stop_flag = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -107,17 +127,20 @@ class Tracker:
             self._state = TrackerState.IDLE
             self._norad_id = None
             self._current_pass = None
+        self.rotator.release()
 
     def manual_goto(self, azimuth: float, elevation: float) -> None:
         with self._lock:
             self._state = TrackerState.MANUAL
             self._norad_id = None
+        self.rotator.release()
         self.rotator.goto(azimuth, elevation)
 
     def manual_jog(self, d_az: float, d_el: float) -> None:
         with self._lock:
             self._state = TrackerState.MANUAL
             self._norad_id = None
+        self.rotator.release()
         self.rotator.jog(d_az, d_el)
 
     def manual_stop(self) -> None:
@@ -125,12 +148,14 @@ class Tracker:
             if self._state != TrackerState.MANUAL:
                 self._state = TrackerState.IDLE
                 self._norad_id = None
+        self.rotator.release()
         self.rotator.stop()
 
     def park(self) -> None:
         with self._lock:
             self._state = TrackerState.IDLE
             self._norad_id = None
+        self.rotator.release()
         self.rotator.goto(self.config.park.az, self.config.park.el)
 
     # -- introspection ------------------------------------------------------
@@ -150,6 +175,11 @@ class Tracker:
     @property
     def wrap_warning(self) -> str:
         return self._wrap_warning
+
+    @property
+    def blocked(self) -> str:
+        """Why the rotator is refusing commands, if it is."""
+        return self._blocked
 
     # -- loop ---------------------------------------------------------------
 
@@ -172,6 +202,9 @@ class Tracker:
             return
 
         now = self._now()
+        # Tell the rotator we are still here. If this stops arriving mid-pass
+        # the rotator stops rather than carry on toward a stale target.
+        self.rotator.heartbeat()
         self._ensure_pass(sat, now)
         obs = self.predictor.observe(sat, now)
 
@@ -223,6 +256,18 @@ class Tracker:
         self._prev_continuous_az = continuous[0]
 
     def _command(self, sky_azimuth: float, elevation: float) -> None:
+        try:
+            self._command_unchecked(sky_azimuth, elevation)
+        except MotionBlocked as exc:
+            # An interlock said no — usually "not homed yet". Report it once in
+            # the status feed instead of logging a traceback every second.
+            if self._blocked != str(exc):
+                log.warning("Tracking blocked: %s", exc)
+            self._blocked = str(exc)
+            return
+        self._blocked = ""
+
+    def _command_unchecked(self, sky_azimuth: float, elevation: float) -> None:
         continuous = self._continuous(sky_azimuth)
         commanded = continuous + self._az_offset
         az_min, az_max = self.rotator.azimuth_travel

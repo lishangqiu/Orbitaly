@@ -208,6 +208,37 @@ main {
 .fault { color: var(--status-crit); font-size: 12px; min-height: 4px; margin: 4px 0; }
 .warn-text { color: var(--status-warn); font-size: 12px; min-height: 4px; margin: 4px 0; }
 
+/* Interlock state: the rotator will not move until this is dealt with, so it
+   sits above the controls rather than whispering in a corner. */
+.status-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  border-left: 3px solid var(--ink-3);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.status-banner.warn { border-left-color: var(--status-warn); color: var(--status-warn); }
+.status-banner.error { border-left-color: var(--status-crit); color: var(--status-crit); }
+.status-banner .btn { flex: none; }
+
+.sched-controls { display: flex; align-items: center; gap: 8px; }
+.btn.active { border-color: var(--status-good); color: var(--status-good); }
+
+.btn.estop {
+  border-color: var(--status-crit);
+  background: var(--status-crit);
+  color: #12100c;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.btn.estop:hover { filter: brightness(1.15); }
+
 .jog-grid {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;

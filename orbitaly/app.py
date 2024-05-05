@@ -12,8 +12,10 @@ from fastapi.staticfiles import StaticFiles
 from .config import Config
 from .core.predictor import Observation, Predictor
 from .core.tle import TleManager
+from .core.scheduler import Scheduler
 from .core.tracker import Tracker
-from .hardware.gpio import make_rotator
+from .motion.detect import make_rotator
+from .radio import DopplerTuner, make_rig
 
 log = logging.getLogger(__name__)
 
@@ -31,13 +33,27 @@ class Services:
         self.tracker = Tracker(config.tracker, self.predictor, self.tle, self.rotator)
         self.doppler_2m_uplink_hz = config.doppler_2m.uplink_hz
         self.doppler_2m_downlink_hz = config.doppler_2m.downlink_hz
+        self.rig = make_rig(config.rig)
+        self.tuner = DopplerTuner(config.rig, self.rig, self.rig_readout)
+        self.scheduler = Scheduler(
+            config.scheduler,
+            self.predictor,
+            self.tle,
+            self.tracker,
+            self.rotator,
+            default_min_elevation=config.tracker.min_elevation_deg,
+        )
 
     def start(self) -> None:
         self.tle.start()
         self.tracker.start()
+        self.tuner.start()
+        self.scheduler.start()
 
     def close(self) -> None:
+        self.scheduler.close()
         self.tracker.close()
+        self.tuner.close()
         self.rotator.close()
         self.tle.stop()
 
@@ -82,17 +98,19 @@ class Services:
         self.doppler_2m_uplink_hz = uplink_hz
         self.doppler_2m_downlink_hz = downlink_hz
 
-    def doppler_2m_readout(self, at: float | None = None) -> dict:
-        """Live doppler correction for the configured 2 m working frequencies.
+    def doppler_readout(
+        self, uplink_hz: float, downlink_hz: float, band: str = "", at: float | None = None
+    ) -> dict:
+        """Live doppler correction for one uplink/downlink pair.
 
         Applied to the currently tracked satellite. Rate (Hz/s) is derived
-        numerically over a 1 s baseline — it is what an operator (or later,
-        CAT control) needs to keep a signal centered near TCA.
+        numerically over a 1 s baseline — it is what an operator, or the CAT
+        tuner, needs to keep a signal centered near TCA.
         """
         readout = {
-            "band": "2m",
-            "uplink_hz": self.doppler_2m_uplink_hz,
-            "downlink_hz": self.doppler_2m_downlink_hz,
+            "band": band,
+            "uplink_hz": uplink_hz,
+            "downlink_hz": downlink_hz,
             "active": False,
         }
         norad_id = self.tracker.tracked_norad_id
@@ -103,23 +121,40 @@ class Services:
         obs = self.predictor.observe(sat, now)
         obs_next = self.predictor.observe(sat, now + 1.0)
 
-        down_shift = obs.doppler_shift_hz(self.doppler_2m_downlink_hz)
-        up_shift = obs.doppler_shift_hz(self.doppler_2m_uplink_hz)
+        down_shift = obs.doppler_shift_hz(downlink_hz)
+        up_shift = obs.doppler_shift_hz(uplink_hz)
         readout.update(
             {
                 "active": True,
                 "norad_id": sat.norad_id,
+                "elevation": obs.elevation,
                 # RX: tune here to hear a downlink transmitted on downlink_hz
-                "downlink_corrected_hz": self.doppler_2m_downlink_hz + down_shift,
+                "downlink_corrected_hz": downlink_hz + down_shift,
                 "downlink_shift_hz": down_shift,
-                "downlink_rate_hz_s": obs_next.doppler_shift_hz(self.doppler_2m_downlink_hz) - down_shift,
+                "downlink_rate_hz_s": obs_next.doppler_shift_hz(downlink_hz) - down_shift,
                 # TX: transmit here to arrive on uplink_hz at the satellite
-                "uplink_corrected_hz": self.doppler_2m_uplink_hz - up_shift,
+                "uplink_corrected_hz": uplink_hz - up_shift,
                 "uplink_shift_hz": up_shift,
-                "uplink_rate_hz_s": -(obs_next.doppler_shift_hz(self.doppler_2m_uplink_hz) - up_shift),
+                "uplink_rate_hz_s": -(obs_next.doppler_shift_hz(uplink_hz) - up_shift),
             }
         )
         return readout
+
+    def doppler_2m_readout(self, at: float | None = None) -> dict:
+        return self.doppler_readout(
+            self.doppler_2m_uplink_hz, self.doppler_2m_downlink_hz, band="2m", at=at
+        )
+
+    def rig_readout(self, at: float | None = None) -> dict:
+        """What the radio should be tuned to right now.
+
+        Defaults to the 2 m panel's working frequencies, so a station that
+        only works 2 m needs no extra configuration, but the rig can be
+        pointed at any band (a 70 cm downlink, say) independently.
+        """
+        uplink = self.config.rig.uplink_hz or self.doppler_2m_uplink_hz
+        downlink = self.config.rig.downlink_hz or self.doppler_2m_downlink_hz
+        return self.doppler_readout(uplink, downlink, band="rig", at=at)
 
     def status_snapshot(self) -> dict:
         rotator_state = self.rotator.state()
@@ -147,9 +182,12 @@ class Services:
             "tracker": {
                 "state": self.tracker.state.value,
                 "wrap_warning": self.tracker.wrap_warning,
+                "blocked": self.tracker.blocked,
             },
             "tracked": tracked,
             "doppler_2m": self.doppler_2m_readout(),
+            "rig": self.tuner.status(),
+            "schedule": self.scheduler.status(),
             "rotator": {
                 "azimuth": round(rotator_state.azimuth, 2),
                 "elevation": round(rotator_state.elevation, 2),
@@ -157,6 +195,7 @@ class Services:
                 "target_elevation": round(rotator_state.target_elevation, 2),
                 "moving": rotator_state.moving,
                 "homed": rotator_state.homed,
+                "homing": rotator_state.homing,
                 "fault": rotator_state.fault,
                 "azimuth_travel": self.rotator.azimuth_travel,
                 "elevation_travel": self.rotator.elevation_travel,
@@ -193,9 +232,17 @@ def create_app(config: Config) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         services.start()
+        rotctld = None
+        if config.server.rotctld.enabled:
+            from .net.rotctld_server import RotctldServer
+
+            rotctld = RotctldServer(services, config.server.rotctld)
+            await rotctld.start()
         try:
             yield
         finally:
+            if rotctld is not None:
+                await rotctld.stop()
             services.close()
 
     app = FastAPI(title="Orbitaly", version="0.1.0", lifespan=lifespan)

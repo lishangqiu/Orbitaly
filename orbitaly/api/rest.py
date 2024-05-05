@@ -8,9 +8,15 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..app import pass_dict
+from ..motion.errors import MotionBlocked
 from .deps import get_services
 
 router = APIRouter()
+
+
+def _blocked(exc: MotionBlocked) -> HTTPException:
+    """An interlock refusal is a conflict, not a bad request."""
+    return HTTPException(409, str(exc))
 
 
 class GotoRequest(BaseModel):
@@ -26,6 +32,12 @@ class JogRequest(BaseModel):
 class Doppler2mRequest(BaseModel):
     uplink_hz: float
     downlink_hz: float
+
+
+class RigRequest(BaseModel):
+    enabled: bool | None = None
+    uplink_hz: float | None = None
+    downlink_hz: float | None = None
 
 
 @router.get("/satellites")
@@ -95,18 +107,26 @@ def track(norad_id: int, request: Request):
         get_services(request).tracker.track(norad_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except MotionBlocked as exc:
+        raise _blocked(exc) from exc
     return {"ok": True}
 
 
 @router.post("/rotator/goto")
 def rotator_goto(body: GotoRequest, request: Request):
-    get_services(request).tracker.manual_goto(body.az, body.el)
+    try:
+        get_services(request).tracker.manual_goto(body.az, body.el)
+    except MotionBlocked as exc:
+        raise _blocked(exc) from exc
     return {"ok": True}
 
 
 @router.post("/rotator/jog")
 def rotator_jog(body: JogRequest, request: Request):
-    get_services(request).tracker.manual_jog(body.d_az, body.d_el)
+    try:
+        get_services(request).tracker.manual_jog(body.d_az, body.d_el)
+    except MotionBlocked as exc:
+        raise _blocked(exc) from exc
     return {"ok": True}
 
 
@@ -116,9 +136,31 @@ def rotator_stop(request: Request):
     return {"ok": True}
 
 
+@router.post("/rotator/estop")
+def rotator_estop(request: Request):
+    """Cut motion now. Position reference may be lost; re-home afterwards."""
+    services = get_services(request)
+    services.tracker.stop_tracking()
+    services.rotator.emergency_stop("emergency stop requested from the dashboard")
+    return {"ok": True, "rotator": services.status_snapshot()["rotator"]}
+
+
+@router.post("/rotator/fault/clear")
+def rotator_clear_fault(request: Request):
+    services = get_services(request)
+    cleared = services.rotator.clear_fault()
+    state = services.status_snapshot()["rotator"]
+    if not cleared:
+        raise HTTPException(409, f"Fault condition still present: {state['fault']}")
+    return {"ok": True, "rotator": state}
+
+
 @router.post("/rotator/park")
 def rotator_park(request: Request):
-    get_services(request).tracker.park()
+    try:
+        get_services(request).tracker.park()
+    except MotionBlocked as exc:
+        raise _blocked(exc) from exc
     return {"ok": True}
 
 
@@ -126,6 +168,47 @@ def rotator_park(request: Request):
 def rotator_home(request: Request):
     get_services(request).rotator.home()
     return {"ok": True}
+
+
+@router.get("/schedule")
+def schedule(request: Request):
+    return get_services(request).scheduler.status()
+
+
+@router.post("/schedule/{action}")
+def schedule_set(action: str, request: Request):
+    if action not in ("enable", "disable"):
+        raise HTTPException(404, "Use /api/schedule/enable or /api/schedule/disable")
+    services = get_services(request)
+    services.scheduler.set_enabled(action == "enable")
+    return services.scheduler.status()
+
+
+@router.get("/rig")
+def rig_status(request: Request):
+    services = get_services(request)
+    return {**services.tuner.status(), "readout": services.rig_readout()}
+
+
+@router.post("/rig")
+def rig_configure(body: RigRequest, request: Request):
+    """Enable/disable tuning and set the rig's working frequencies."""
+    services = get_services(request)
+    rig_config = services.config.rig
+    if body.uplink_hz is not None:
+        rig_config.uplink_hz = _check_frequency(body.uplink_hz, "uplink")
+    if body.downlink_hz is not None:
+        rig_config.downlink_hz = _check_frequency(body.downlink_hz, "downlink")
+    if body.enabled is not None:
+        services.tuner.set_enabled(body.enabled)
+    return {**services.tuner.status(), "readout": services.rig_readout()}
+
+
+def _check_frequency(hz: float, label: str) -> float:
+    # Wide open on purpose: satellites are worked from 29 MHz to 24 GHz.
+    if not 1e6 <= hz <= 3e10:
+        raise HTTPException(422, f"{label} {hz/1e6:.4f} MHz is not a plausible rig frequency")
+    return hz
 
 
 @router.get("/doppler")
