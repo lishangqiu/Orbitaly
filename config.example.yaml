@@ -57,6 +57,11 @@ server:
     host: 0.0.0.0
     port: 4533
 
+# Web console appearance. Stamped onto the page by the server, so every
+# browser pointed at this station gets the same one. Restart to change it.
+ui:
+  theme: dark              # dark (default, for a dim shack) | light (daylight)
+
 # Radio control for automatic doppler tuning, via hamlib's rigctld.
 # Start the daemon separately, e.g.:  rigctld -m 3081 -r /dev/ttyUSB0
 rig:

@@ -1,7 +1,13 @@
-/* Orbitaly console — dark operations surface.
+/* Orbitaly console — dark operations surface, with a light palette for
+   daylight benchwork. Which one loads is `ui.theme` in the config file,
+   stamped onto <html data-theme> by the server; nothing here toggles.
+
    Tokens follow the project's data-viz palette (validated for CVD + contrast):
    series-1/series-2 are the two chart identities (satellite/pass, antenna);
-   status colors are reserved for state and never reused as series. */
+   status colors are reserved for state and never reused as series. Every
+   painted color in the console — and in the two canvases, which read these
+   same variables — resolves through this block, so a theme is a token swap
+   and never a second set of rules. */
 
 :root {
   --page: #0d0d0d;
@@ -25,6 +31,45 @@
   --status-warn: #fab219;
   --status-serious: #ec835a;
   --status-crit: #d03b3b;
+  /* Text that sits *on* a filled accent (primary button, E-STOP), and the
+     map's night shading. Both flip with the theme independently of the ink
+     ramp: they are read against the accent, not against the page. */
+  --ink-on-accent: #ffffff;
+  --ink-on-crit: #12100c;
+  --banner-bg: rgba(255, 255, 255, 0.04);
+  --nightshade: rgba(0, 0, 0, 0.30);
+}
+
+/* Light: the same palette re-anchored to a warm off-white. The series and
+   status hues are darkened rather than reused — on white the dark theme's
+   yellow lands near 1.8:1, and these colors label text (an "UP" badge, a
+   fault line), not just strokes. */
+:root[data-theme="light"] {
+  --page: #f4f3ee;
+  --surface: #ffffff;
+  --surface-2: #eceae3;
+  --border: rgba(0, 0, 0, 0.14);
+  --ink: #14140f;
+  --ink-2: #3d3b33;
+  --ink-3: #6b6860;
+  --grid: #e2e0d8;
+  --axis: #b9b6ac;
+  --series-1: #1f6fd0;
+  --series-2: #b8431a;
+  --series-3: #1d7d66;
+  --series-4: #8b4fa0;
+  --series-5: #8a6f00;
+  --series-6: #1a7f96;
+  --status-good: #0c7a0c;
+  --status-warn: #9a6a00;
+  --status-serious: #b8531f;
+  --status-crit: #c02626;
+  --ink-on-accent: #ffffff;
+  --ink-on-crit: #ffffff;
+  --banner-bg: rgba(0, 0, 0, 0.04);
+  /* The terminator fill: 30% black over a light map reads as a stain, and the
+     tracks underneath have to stay legible through it. */
+  --nightshade: rgba(20, 20, 15, 0.13);
 }
 
 * { box-sizing: border-box; }
@@ -328,7 +373,7 @@ main {
   padding: 8px 10px;
   border-radius: 4px;
   border-left: 3px solid var(--ink-3);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--banner-bg);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -342,7 +387,7 @@ main {
 .btn.estop {
   border-color: var(--status-crit);
   background: var(--status-crit);
-  color: #12100c;
+  color: var(--ink-on-crit);
   font-weight: 700;
   letter-spacing: 0.06em;
 }
@@ -380,11 +425,11 @@ main {
 .btn:hover { border-color: var(--ink-3); color: var(--ink); }
 .btn.small { font-size: 11px; padding: 3px 8px; }
 .btn.danger { border-color: var(--status-crit); color: var(--status-crit); }
-.btn.danger:hover { background: var(--status-crit); color: var(--ink); }
+.btn.danger:hover { background: var(--status-crit); color: var(--ink-on-accent); }
 .btn.primary {
   background: var(--series-1);
   border-color: var(--series-1);
-  color: var(--ink);
+  color: var(--ink-on-accent);
   font-weight: 600;
 }
 .btn.primary:hover { filter: brightness(1.1); }

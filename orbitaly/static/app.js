@@ -3,16 +3,25 @@
 
 const $ = (id) => document.getElementById(id);
 
-/* Chart tokens (kept in sync with style.css) */
+/* Chart tokens, read from style.css rather than restated here, so the two
+   canvases land on whichever palette the configured theme (ui.theme, stamped
+   onto <html data-theme> by the server) put on :root. The literals are
+   fallbacks for a stylesheet that has not applied — the dark values, matching
+   what index.html ships with. Read once: the theme is fixed for the life of
+   the page. */
+const rootStyle = getComputedStyle(document.documentElement);
+const token = (name, fallback) => rootStyle.getPropertyValue(name).trim() || fallback;
+
 const C = {
-  grid: "#2c2c2a",
-  axis: "#383835",
-  ink: "#ffffff",
-  ink2: "#c3c2b7",
-  ink3: "#898781",
-  surface: "#1a1a19",
-  series1: "#3987e5", // satellite + pass track
-  series2: "#d95926", // antenna pointing
+  grid: token("--grid", "#2c2c2a"),
+  axis: token("--axis", "#383835"),
+  ink: token("--ink", "#ffffff"),
+  ink2: token("--ink-2", "#c3c2b7"),
+  ink3: token("--ink-3", "#898781"),
+  surface: token("--surface", "#1a1a19"),
+  series1: token("--series-1", "#3987e5"), // satellite + pass track
+  series2: token("--series-2", "#d95926"), // antenna pointing
+  nightshade: token("--nightshade", "rgba(0, 0, 0, 0.30)"),
 };
 
 /* Track colors, in display-set order. The tracked satellite keeps series-1 so
@@ -20,7 +29,9 @@ const C = {
    series-2 for the next satellite. The display set is capped at this length
    rather than at some larger number with colors repeating: past six the map
    is spaghetti anyway. */
-const SERIES = ["#3987e5", "#d95926", "#2eae8e", "#c07fd0", "#d4b02c", "#5fc4d8"];
+const SERIES = ["#3987e5", "#d95926", "#2eae8e", "#c07fd0", "#d4b02c", "#5fc4d8"].map(
+  (fallback, i) => token(`--series-${i + 1}`, fallback)
+);
 const MAX_DISPLAY = SERIES.length;
 
 /* The endpoint's samples are a minute apart, so refetching faster than this
@@ -563,7 +574,7 @@ function drawNight(ctx, w, h, now) {
   ctx.lineTo(xEnd, yCap);
   ctx.lineTo(Geo.project(-180, capLat, w, h)[0], yCap);
   ctx.closePath();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.30)";
+  ctx.fillStyle = C.nightshade;
   ctx.fill();
 }
 

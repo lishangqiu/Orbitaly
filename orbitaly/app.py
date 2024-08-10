@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import Config
@@ -21,6 +22,11 @@ from .radio import DopplerTuner, make_rig
 log = logging.getLogger(__name__)
 
 BAND_2M_HZ = (144_000_000.0, 148_000_000.0)
+
+#: What index.html ships with, and what the configured theme replaces. Keeping
+#: a real attribute in the file rather than a placeholder means the page is
+#: still valid — and still dark — if it is ever opened straight off disk.
+THEME_MARKER = 'data-theme="dark"'
 
 
 class Services:
@@ -278,5 +284,19 @@ def create_app(config: Config) -> FastAPI:
     app.include_router(ws_router)
 
     static_dir = Path(__file__).parent / "static"
+    index_path = static_dir / "index.html"
+
+    # The one page StaticFiles does not get to serve: the theme is stamped onto
+    # <html> here rather than applied by app.js after load, so a light-theme
+    # station does not flash the dark palette on every refresh. Registered
+    # before the mount below, which would otherwise answer "/" itself.
+    @app.get("/", include_in_schema=False)
+    @app.get("/index.html", include_in_schema=False)
+    def index() -> HTMLResponse:
+        html = index_path.read_text(encoding="utf-8")
+        return HTMLResponse(
+            html.replace(THEME_MARKER, f'data-theme="{config.ui.theme}"', 1)
+        )
+
     app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
     return app

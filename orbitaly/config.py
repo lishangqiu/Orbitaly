@@ -269,6 +269,24 @@ class ServerConfig:
     rotctld: RotctldConfig = field(default_factory=RotctldConfig)
 
 
+#: Themes the console ships palettes for. Both are built from the same tokens,
+#: so a satellite is series-1 in either one.
+THEMES = ("dark", "light")
+
+
+@dataclass
+class UiConfig:
+    """Web console appearance.
+
+    Dark is the default because the console is usually read in a dim shack
+    beside a radio; light is for daylight benchwork and projectors. The theme
+    is fixed at load time rather than toggled in the browser, so every screen
+    at a station shows the same thing.
+    """
+
+    theme: str = "dark"
+
+
 @dataclass
 class Config:
     station: StationConfig = field(default_factory=StationConfig)
@@ -279,6 +297,7 @@ class Config:
     rig: RigConfig = field(default_factory=RigConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    ui: UiConfig = field(default_factory=UiConfig)
     transponder_overrides: dict[str, Any] = field(default_factory=dict)
 
 
@@ -302,4 +321,12 @@ def load_config(path: str | Path | None = None) -> Config:
     raw = yaml.safe_load(Path(path).read_text()) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"Config file {path} must be a YAML mapping")
-    return _merge_dataclass(config, raw)
+    _merge_dataclass(config, raw)
+    # A typo here would otherwise reach the browser as an unknown data-theme
+    # attribute and silently fall back to dark, which reads as "the setting
+    # does nothing" rather than as a mistake in the file.
+    if config.ui.theme not in THEMES:
+        raise ValueError(
+            f"ui.theme must be one of {', '.join(THEMES)}, got {config.ui.theme!r}"
+        )
+    return config
